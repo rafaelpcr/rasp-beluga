@@ -372,37 +372,57 @@ class DatabaseManager:
             query = """
                 INSERT INTO radar_dados
                 (x_point, y_point, move_speed, heart_rate, breath_rate, 
-                satisfaction_score, satisfaction_class, is_engaged, engagement_duration, 
-                session_id, section_id, product_id, timestamp, serial_number)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                satisfaction_score, satisfaction_class, is_engaged, engagement_duration,
+                session_id, section_id, product_id, timestamp, serial_number,
+                total_phase, breath_phase, heart_phase, distance)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
+            
+            # Calcular duração do engajamento (em segundos)
+            if not hasattr(self, 'last_engagement_time'):
+                self.last_engagement_time = None
+            
+            if data.get('is_engaged'):
+                if self.last_engagement_time:
+                    engagement_duration = int((datetime.now() - self.last_engagement_time).total_seconds())
+                else:
+                    engagement_duration = 0
+                self.last_engagement_time = datetime.now()
+            else:
+                engagement_duration = 0
+                self.last_engagement_time = None
             
             # Preparar parâmetros
             params = (
-                float(data.get('x_point')),
-                float(data.get('y_point')),
-                float(data.get('move_speed')),
-                float(data.get('heart_rate')) if data.get('heart_rate') is not None else None,
-                float(data.get('breath_rate')) if data.get('breath_rate') is not None else None,
+                float(data.get('x_point', 0)),
+                float(data.get('y_point', 0)),
+                float(data.get('move_speed', 0)),
+                float(data.get('heart_rate', 0)),
+                float(data.get('breath_rate', 0)),
                 float(data.get('satisfaction_score', 0)),
                 data.get('satisfaction_class', 'NEUTRA'),
                 bool(data.get('is_engaged', False)),
-                int(data.get('engagement_duration', 0)),
-                data.get('session_id'),
-                data.get('section_id'),  # Pode ser None
+                engagement_duration,
+                data.get('session_id', str(uuid.uuid4())),
+                data.get('section_id'),
                 data.get('product_id', 'UNKNOWN'),
                 data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-                data.get('serial_number', 'RADAR_1')
+                data.get('serial_number', 'RADAR_1'),
+                float(data.get('total_phase', 0)),
+                float(data.get('breath_phase', 0)),
+                float(data.get('heart_phase', 0)),
+                float(data.get('distance', 0))
             )
             
-            logger.info(f"Query: {query}")
-            logger.info(f"Parâmetros: {params}")
+            logger.debug("Executando query de inserção:")
+            logger.debug(f"Query: {query}")
+            logger.debug(f"Parâmetros: {params}")
             
             # Executar inserção com retry em caso de deadlock
             try:
                 self.cursor.execute(query, params)
                 self.conn.commit()
-                logger.info("✅ Dados inseridos com sucesso!")
+                logger.debug("✅ Query executada com sucesso!")
                 return True
             except mysql.connector.errors.DatabaseError as e:
                 if e.errno == 1205 and attempt < max_retries - 1:  # Lock timeout error
@@ -410,7 +430,7 @@ class DatabaseManager:
                     time.sleep(retry_delay)
                     return self.insert_radar_data(data, attempt + 1, max_retries, retry_delay)
                 raise
-                
+            
         except Exception as e:
             logger.error(f"❌ Erro ao inserir dados: {str(e)}")
             logger.error(traceback.format_exc())
@@ -655,71 +675,95 @@ class SerialRadarManager:
                 
     def process_radar_data(self, raw_data):
         """Processa dados brutos do radar recebidos pela serial"""
-        logger.info("="*50)
-        logger.info("📡 NOVOS DADOS RECEBIDOS")
-        logger.info("="*50)
-        
-        # Converter dados
-        converted_data = convert_radar_data(raw_data)
-        if not converted_data:
-            logger.warning("⚠️ Não foi possível extrair dados do radar desta mensagem")
-            return
+        try:
+            # Converter dados
+            converted_data = convert_radar_data(raw_data)
+            if not converted_data:
+                logger.warning("⚠️ Não foi possível extrair dados do radar desta mensagem")
+                return
             
-        # Adicionar timestamp atual
-        converted_data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        logger.info(f"⏰ Timestamp: {converted_data['timestamp']}")
-        
-        # Identificar seção baseado na posição
-        section = shelf_manager.get_section_at_position(
-            converted_data['x_point'],
-            converted_data['y_point'],
-            self.db_manager
-        )
-        
-        if section:
-            converted_data['section_id'] = section['section_id']
-            converted_data['product_id'] = section['product_id']
-            logger.info(f"📍 Seção: {section['section_name']}")
-            logger.info(f"📦 Produto: {section['product_id']}")
-        else:
-            converted_data['section_id'] = None
-            converted_data['product_id'] = None
-            logger.warning("❌ Nenhuma seção detectada para esta posição")
+            # Adicionar timestamp atual
+            current_time = datetime.now()
+            converted_data['timestamp'] = current_time.strftime('%Y-%m-%d %H:%M:%S')
             
-        # Calcular satisfação
-        satisfaction_data = self.analytics_manager.calculate_satisfaction_score(
-            converted_data.get('move_speed'),
-            converted_data.get('heart_rate'),
-            converted_data.get('breath_rate'),
-            converted_data.get('distance', 2.0)
-        )
-        
-        converted_data['satisfaction_score'] = satisfaction_data[0]
-        converted_data['satisfaction_class'] = satisfaction_data[1]
-        
-        # Calcular engajamento
-        is_engaged = converted_data.get('move_speed', float('inf')) <= self.analytics_manager.MOVEMENT_THRESHOLD
-        converted_data['is_engaged'] = is_engaged
-        
-        # Log dos dados calculados
-        logger.info("\n📊 DADOS PROCESSADOS:")
-        logger.info(f"   Posição X: {converted_data['x_point']:.2f}m")
-        logger.info(f"   Posição Y: {converted_data['y_point']:.2f}m")
-        logger.info(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
-        logger.info(f"   Batimentos: {converted_data['heart_rate']:.1f} bpm")
-        logger.info(f"   Respiração: {converted_data['breath_rate']:.1f} rpm")
-        logger.info(f"\n🎯 STATUS:")
-        logger.info(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
-        logger.info(f"   Satisfação: {satisfaction_data[0]:.1f} ({satisfaction_data[1]})")
-        logger.info("="*50)
-        
-        # Inserir dados no banco
-        if self.db_manager:
-            success = self.db_manager.insert_radar_data(converted_data)
-            if not success:
-                logger.error("❌ Falha ao inserir dados no banco")
-        else:
-            logger.warning("⚠️ Gerenciador de banco de dados não disponível, dados não foram salvos")
+            # Identificar seção baseado na posição
+            section = shelf_manager.get_section_at_position(
+                converted_data.get('x_point', 0),
+                converted_data.get('y_point', 0),
+                self.db_manager
+            )
+            
+            if section:
+                converted_data['section_id'] = section['section_id']
+                converted_data['product_id'] = section['product_id']
+            else:
+                converted_data['section_id'] = None
+                converted_data['product_id'] = None
+            
+            # Calcular satisfação
+            satisfaction_data = self.analytics_manager.calculate_satisfaction_score(
+                converted_data.get('move_speed'),
+                converted_data.get('heart_rate'),
+                converted_data.get('breath_rate'),
+                converted_data.get('distance', 2.0)
+            )
+            
+            converted_data['satisfaction_score'] = satisfaction_data[0]
+            converted_data['satisfaction_class'] = satisfaction_data[1]
+            
+            # Calcular engajamento
+            is_engaged = converted_data.get('move_speed', float('inf')) <= self.analytics_manager.MOVEMENT_THRESHOLD
+            converted_data['is_engaged'] = is_engaged
+            
+            # Gerar um session_id único se não existir
+            if not hasattr(self, 'current_session_id'):
+                self.current_session_id = str(uuid.uuid4())
+            converted_data['session_id'] = self.current_session_id
+            
+            # Exibir dados formatados no terminal
+            logger.info("\n" + "="*50)
+            logger.info("📡 DADOS DO RADAR DETECTADOS")
+            logger.info("="*50)
+            logger.info(f"⏰ Timestamp: {converted_data['timestamp']}")
+            
+            if section:
+                logger.info(f"\n📍 LOCALIZAÇÃO:")
+                logger.info(f"   Seção: {section['section_name']}")
+                logger.info(f"   Produto: {section['product_id']}")
+            
+            logger.info(f"\n📊 DADOS DE POSIÇÃO:")
+            logger.info(f"   X: {converted_data.get('x_point', 0):.2f}m")
+            logger.info(f"   Y: {converted_data.get('y_point', 0):.2f}m")
+            logger.info(f"   Distância: {converted_data.get('distance', 0):.2f}m")
+            logger.info(f"   Velocidade: {converted_data.get('move_speed', 0):.2f} cm/s")
+            
+            logger.info(f"\n❤️ SINAIS VITAIS:")
+            logger.info(f"   Batimentos: {converted_data.get('heart_rate', 0):.1f} bpm")
+            logger.info(f"   Respiração: {converted_data.get('breath_rate', 0):.1f} rpm")
+            
+            logger.info(f"\n🎯 ANÁLISE:")
+            logger.info(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
+            logger.info(f"   Score: {satisfaction_data[0]:.1f}")
+            logger.info(f"   Classificação: {satisfaction_data[1]}")
+            logger.info("="*50)
+            
+            # Inserir dados no banco
+            if self.db_manager:
+                try:
+                    success = self.db_manager.insert_radar_data(converted_data)
+                    if success:
+                        logger.info("✅ Dados salvos no banco com sucesso!")
+                    else:
+                        logger.error("❌ Falha ao salvar dados no banco")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao salvar no banco: {str(e)}")
+                    logger.error(traceback.format_exc())
+            else:
+                logger.warning("⚠️ Gerenciador de banco de dados não disponível")
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao processar dados: {str(e)}")
+            logger.error(traceback.format_exc())
 
 def main():
     # Inicializar gerenciador de banco de dados
