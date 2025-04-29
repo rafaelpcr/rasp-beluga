@@ -566,7 +566,99 @@ class AnalyticsManager:
 
 class VitalSignsManager:
     def __init__(self):
-        pass  # Por enquanto sem implementação específica
+        self.phase_buffer_size = 100  # Tamanho do buffer para análise
+        self.heart_phase_buffer = []
+        self.breath_phase_buffer = []
+        self.last_heart_rate = None
+        self.last_breath_rate = None
+        self.sample_time = 0.1  # Tempo entre amostras (100ms)
+        
+    def calculate_vital_signs(self, total_phase, breath_phase, heart_phase):
+        """
+        Calcula os sinais vitais usando os dados de fase do radar
+        """
+        try:
+            # Atualizar buffers
+            self.heart_phase_buffer.append(heart_phase)
+            self.breath_phase_buffer.append(breath_phase)
+            
+            # Manter tamanho do buffer
+            if len(self.heart_phase_buffer) > self.phase_buffer_size:
+                self.heart_phase_buffer.pop(0)
+            if len(self.breath_phase_buffer) > self.phase_buffer_size:
+                self.breath_phase_buffer.pop(0)
+            
+            # Só calcular se tivermos dados suficientes
+            if len(self.heart_phase_buffer) < 20 or len(self.breath_phase_buffer) < 20:
+                return self.last_heart_rate, self.last_breath_rate
+            
+            # Calcular batimentos cardíacos usando FFT
+            heart_rate = self._calculate_rate_from_phase(
+                self.heart_phase_buffer,
+                min_freq=0.8,  # 48 BPM
+                max_freq=3.0,  # 180 BPM
+                rate_multiplier=60
+            )
+            
+            # Calcular respiração usando FFT
+            breath_rate = self._calculate_rate_from_phase(
+                self.breath_phase_buffer,
+                min_freq=0.1,  # 6 respirações/min
+                max_freq=0.5,  # 30 respirações/min
+                rate_multiplier=60
+            )
+            
+            # Validar e atualizar últimas leituras válidas
+            if heart_rate and 45 <= heart_rate <= 200:
+                self.last_heart_rate = heart_rate
+            
+            if breath_rate and 6 <= breath_rate <= 30:
+                self.last_breath_rate = breath_rate
+            
+            return self.last_heart_rate, self.last_breath_rate
+            
+        except Exception as e:
+            logger.error(f"Erro ao calcular sinais vitais: {str(e)}")
+            return self.last_heart_rate, self.last_breath_rate
+    
+    def _calculate_rate_from_phase(self, phase_data, min_freq, max_freq, rate_multiplier):
+        """
+        Calcula a frequência dominante no sinal de fase usando FFT
+        """
+        try:
+            if not phase_data:
+                return None
+                
+            # Remover média do sinal (centralizar em zero)
+            phase_mean = np.mean(phase_data)
+            centered_phase = np.array(phase_data) - phase_mean
+            
+            # Aplicar janela Hanning para reduzir vazamento espectral
+            window = np.hanning(len(centered_phase))
+            windowed_phase = centered_phase * window
+            
+            # Calcular FFT
+            fft_result = np.fft.fft(windowed_phase)
+            fft_freq = np.fft.fftfreq(len(windowed_phase), d=self.sample_time)
+            
+            # Considerar apenas frequências positivas dentro do range desejado
+            valid_idx = np.where((fft_freq >= min_freq) & (fft_freq <= max_freq))[0]
+            if len(valid_idx) == 0:
+                return None
+                
+            # Encontrar frequência dominante
+            magnitude_spectrum = np.abs(fft_result[valid_idx])
+            peak_idx = np.argmax(magnitude_spectrum)
+            dominant_freq = fft_freq[valid_idx[peak_idx]]
+            
+            # Converter para BPM/RPM
+            rate = abs(dominant_freq * rate_multiplier)
+            
+            return round(rate, 1)
+            
+        except Exception as e:
+            logger.error(f"Erro ao calcular taxa a partir da fase: {str(e)}")
+            return None
 
 class SerialRadarManager:
     def __init__(self, port=None, baudrate=115200):
@@ -730,18 +822,34 @@ class SerialRadarManager:
         """Processa dados brutos do radar recebidos pela serial"""
         try:
             # Converter dados
-            converted_data = convert_radar_data(raw_data)
-            if not converted_data:
+            data = parse_serial_data(raw_data)
+            if not data:
                 return
+                
+            # Calcular sinais vitais usando os dados de fase
+            heart_rate, breath_rate = self.vital_signs_manager.calculate_vital_signs(
+                data.get('total_phase', 0),
+                data.get('breath_phase', 0),
+                data.get('heart_phase', 0)
+            )
             
-            # Adicionar timestamp atual
-            current_time = datetime.now()
-            converted_data['timestamp'] = current_time.strftime('%Y-%m-%d %H:%M:%S')
+            # Criar dicionário com dados convertidos
+            converted_data = {
+                'x_point': data.get('x_point', 0),
+                'y_point': data.get('y_point', 0),
+                'move_speed': data.get('move_speed', 0),
+                'distance': data.get('distance', 0),
+                'dop_index': data.get('dop_index', 0),
+                'cluster_index': data.get('cluster_index', 0),
+                'heart_rate': heart_rate if heart_rate is not None else None,
+                'breath_rate': breath_rate if breath_rate is not None else None,
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
             
             # Identificar seção baseado na posição
             section = shelf_manager.get_section_at_position(
-                converted_data.get('x_point', 0),
-                converted_data.get('y_point', 0),
+                converted_data['x_point'],
+                converted_data['y_point'],
                 self.db_manager
             )
             
@@ -752,19 +860,24 @@ class SerialRadarManager:
                 converted_data['section_id'] = None
                 converted_data['product_id'] = None
             
+            # Se não temos dados vitais válidos, pular esta leitura
+            if converted_data['heart_rate'] is None or converted_data['breath_rate'] is None:
+                logger.warning("Dados vitais inválidos ou insuficientes, aguardando próxima leitura...")
+                return
+            
             # Calcular satisfação
             satisfaction_data = self.analytics_manager.calculate_satisfaction_score(
-                converted_data.get('move_speed'),
-                converted_data.get('heart_rate'),
-                converted_data.get('breath_rate'),
-                converted_data.get('distance', 2.0)
+                converted_data['move_speed'],
+                converted_data['heart_rate'],
+                converted_data['breath_rate'],
+                converted_data['distance']
             )
             
             converted_data['satisfaction_score'] = satisfaction_data[0]
             converted_data['satisfaction_class'] = satisfaction_data[1]
             
             # Calcular engajamento
-            is_engaged = converted_data.get('move_speed', float('inf')) <= self.analytics_manager.MOVEMENT_THRESHOLD
+            is_engaged = converted_data['move_speed'] <= self.analytics_manager.MOVEMENT_THRESHOLD
             converted_data['is_engaged'] = is_engaged
             
             # Gerar um session_id único se não existir
@@ -786,14 +899,14 @@ class SerialRadarManager:
                 print("\n❌ Nenhuma seção detectada para esta posição")
             
             print(f"\n📊 DADOS DE POSIÇÃO:")
-            print(f"   X: {converted_data.get('x_point', 0):.2f}m")
-            print(f"   Y: {converted_data.get('y_point', 0):.2f}m")
-            print(f"   Distância: {converted_data.get('distance', 0):.2f}m")
-            print(f"   Velocidade: {converted_data.get('move_speed', 0):.2f} cm/s")
+            print(f"   X: {converted_data['x_point']:.2f}m")
+            print(f"   Y: {converted_data['y_point']:.2f}m")
+            print(f"   Distância: {converted_data['distance']:.2f}m")
+            print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
             
             print(f"\n❤️ SINAIS VITAIS:")
-            print(f"   Batimentos: {converted_data.get('heart_rate', 0):.1f} bpm")
-            print(f"   Respiração: {converted_data.get('breath_rate', 0):.1f} rpm")
+            print(f"   Batimentos: {converted_data['heart_rate']:.1f} bpm")
+            print(f"   Respiração: {converted_data['breath_rate']:.1f} rpm")
             
             print(f"\n🎯 ANÁLISE:")
             print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
