@@ -314,10 +314,33 @@ class DatabaseManager:
                     section_id INT,
                     product_id VARCHAR(20),
                     timestamp DATETIME,
-                    serial_number VARCHAR(20)
+                    serial_number VARCHAR(20),
+                    total_phase FLOAT,
+                    breath_phase FLOAT,
+                    heart_phase FLOAT,
+                    distance FLOAT,
+                    dop_index INT,
+                    cluster_index INT
                 )
             """)
             self.conn.commit()
+            
+            # Verificar se as novas colunas existem e adicioná-las se necessário
+            try:
+                self.cursor.execute("""
+                    ALTER TABLE radar_dados 
+                    ADD COLUMN IF NOT EXISTS total_phase FLOAT,
+                    ADD COLUMN IF NOT EXISTS breath_phase FLOAT,
+                    ADD COLUMN IF NOT EXISTS heart_phase FLOAT,
+                    ADD COLUMN IF NOT EXISTS distance FLOAT,
+                    ADD COLUMN IF NOT EXISTS dop_index INT,
+                    ADD COLUMN IF NOT EXISTS cluster_index INT
+                """)
+                self.conn.commit()
+                logger.info("✅ Colunas adicionadas/verificadas com sucesso!")
+            except Exception as e:
+                logger.error(f"Erro ao adicionar novas colunas: {str(e)}")
+            
             logger.info("✅ Tabela radar_dados criada/verificada com sucesso!")
 
             # Verificar tabela radar_sessoes
@@ -347,6 +370,7 @@ class DatabaseManager:
 
         except Exception as e:
             logger.error(f"❌ Erro ao inicializar banco: {str(e)}")
+            logger.error(traceback.format_exc())
             return False
 
     def insert_radar_data(self, data, attempt=0, max_retries=3, retry_delay=1):
@@ -395,7 +419,9 @@ class DatabaseManager:
                 float(data.get('total_phase', 0)),
                 float(data.get('breath_phase', 0)),
                 float(data.get('heart_phase', 0)),
-                float(data.get('distance', 0))
+                float(data.get('distance', 0)),
+                data.get('dop_index', 0),
+                data.get('cluster_index', 0)
             )
             
             logger.debug("Executando query de inserção:")
