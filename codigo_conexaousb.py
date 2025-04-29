@@ -33,75 +33,78 @@ RANGE_STEP = 2.5  # Valor do RANGE_STEP do código ESP32/Arduino
 def parse_serial_data(raw_data):
     """Analisa os dados brutos da porta serial para extrair informações do radar mmWave"""
     try:
-        # Padrões atualizados para o formato real dos dados
-        x_pattern = r'x_point:\s*([-]?\d+\.\d+)'
-        y_pattern = r'y_point:\s*([-]?\d+\.\d+)'
-        speed_pattern = r'move_speed:\s*([-]?\d+\.\d+)\s*cm/s'
-        heart_pattern = r'heart_rate:\s*([-]?\d+\.\d+)'
-        breath_pattern = r'breath_rate:\s*([-]?\d+\.\d+)'
+        # Padrões atualizados para corresponder exatamente ao formato do Arduino
+        x_pattern = r'  x_point:\s*([-]?\d+\.\d+)'  # Note os dois espaços no início
+        y_pattern = r'  y_point:\s*([-]?\d+\.\d+)'
+        dop_pattern = r'  dop_index:\s*(\d+)'
+        cluster_pattern = r'  cluster_index:\s*(\d+)'
+        speed_pattern = r'  move_speed:\s*([-]?\d+\.\d+)\s*cm/s'
+        total_phase_pattern = r'total_phase:\s*([-]?\d+\.\d+)'
+        breath_phase_pattern = r'breath_phase:\s*([-]?\d+\.\d+)'
+        heart_phase_pattern = r'heart_phase:\s*([-]?\d+\.\d+)'
+        breath_rate_pattern = r'breath_rate:\s*([-]?\d+\.\d+)'
+        heart_rate_pattern = r'heart_rate:\s*([-]?\d+\.\d+)'
         distance_pattern = r'distance:\s*([-]?\d+\.\d+)'
         
-        # Novos padrões para fases
-        heart_phase_pattern = r'heart_phase:\s*([-]?\d+\.\d+)'
-        breath_phase_pattern = r'breath_phase:\s*([-]?\d+\.\d+)'
-        total_phase_pattern = r'total_phase:\s*([-]?\d+\.\d+)'
+        # Log para debug
+        logger.debug("Dados brutos recebidos:")
+        logger.debug(raw_data)
         
+        # Verificar se temos uma detecção humana
+        if '-----Human Detected-----' not in raw_data:
+            return None
+            
+        # Verificar se temos informações do alvo
+        if '-----Got Target Info-----' not in raw_data:
+            return None
+            
         # Extrair valores usando expressões regulares
         x_match = re.search(x_pattern, raw_data)
         y_match = re.search(y_pattern, raw_data)
+        dop_match = re.search(dop_pattern, raw_data)
+        cluster_match = re.search(cluster_pattern, raw_data)
         speed_match = re.search(speed_pattern, raw_data)
-        heart_match = re.search(heart_pattern, raw_data)
-        breath_match = re.search(breath_pattern, raw_data)
+        total_phase_match = re.search(total_phase_pattern, raw_data)
+        breath_phase_match = re.search(breath_phase_pattern, raw_data)
+        heart_phase_match = re.search(heart_phase_pattern, raw_data)
+        breath_rate_match = re.search(breath_rate_pattern, raw_data)
+        heart_rate_match = re.search(heart_rate_pattern, raw_data)
         distance_match = re.search(distance_pattern, raw_data)
         
-        # Extrair fases
-        heart_phase_match = re.search(heart_phase_pattern, raw_data)
-        breath_phase_match = re.search(breath_phase_pattern, raw_data)
-        total_phase_match = re.search(total_phase_pattern, raw_data)
+        # Log para debug dos matches
+        logger.debug(f"Matches encontrados:")
+        logger.debug(f"x_point: {x_match.group(1) if x_match else 'None'}")
+        logger.debug(f"y_point: {y_match.group(1) if y_match else 'None'}")
+        logger.debug(f"speed: {speed_match.group(1) if speed_match else 'None'}")
         
-        if '-----Human Detected-----' in raw_data and 'Target #1' in raw_data:
-            # Dados obrigatórios
-            x_point = float(x_match.group(1)) if x_match else 0.0
-            y_point = float(y_match.group(1)) if y_match else 0.0
-            
-            # Calcular distância do sensor
-            distance = float(distance_match.group(1)) if distance_match else math.sqrt(x_point**2 + y_point**2)
-            
-            # Velocidade de movimento
-            move_speed = float(speed_match.group(1)) if speed_match else 0.0
-            
-            # Sinais vitais
-            heart_rate = float(heart_match.group(1)) if heart_match else 75.0
-            breath_rate = float(breath_match.group(1)) if breath_match else 15.0
-            
-            # Dados adicionais de fase
-            heart_phase = float(heart_phase_match.group(1)) if heart_phase_match else 0.0
-            breath_phase = float(breath_phase_match.group(1)) if breath_phase_match else 0.0
-            total_phase = float(total_phase_match.group(1)) if total_phase_match else 0.0
-            
-            logger.debug(f"Dados extraídos com sucesso: x={x_point}, y={y_point}, speed={move_speed}")
-            
-            return {
-                'x_point': x_point,
-                'y_point': y_point,
-                'move_speed': move_speed,
-                'heart_rate': heart_rate,
-                'breath_rate': breath_rate,
-                'distance': distance,
-                'heart_phase': heart_phase,
-                'breath_phase': breath_phase,
-                'total_phase': total_phase
+        # Extrair dados obrigatórios
+        if x_match and y_match:
+            data = {
+                'x_point': float(x_match.group(1)),
+                'y_point': float(y_match.group(1)),
+                'dop_index': int(dop_match.group(1)) if dop_match else 0,
+                'cluster_index': int(cluster_match.group(1)) if cluster_match else 0,
+                'move_speed': float(speed_match.group(1)) if speed_match else 0.0,
+                'total_phase': float(total_phase_match.group(1)) if total_phase_match else 0.0,
+                'breath_phase': float(breath_phase_match.group(1)) if breath_phase_match else 0.0,
+                'heart_phase': float(heart_phase_match.group(1)) if heart_phase_match else 0.0,
+                'breath_rate': float(breath_rate_match.group(1)) if breath_rate_match else 15.0,
+                'heart_rate': float(heart_rate_match.group(1)) if heart_rate_match else 75.0,
+                'distance': float(distance_match.group(1)) if distance_match else 0.0
             }
+            
+            logger.info("✅ Dados extraídos com sucesso:")
+            logger.info(f"   Posição: ({data['x_point']:.2f}, {data['y_point']:.2f})")
+            logger.info(f"   Velocidade: {data['move_speed']:.2f} cm/s")
+            logger.info(f"   Distância: {data['distance']:.2f}m")
+            
+            return data
         else:
-            # Se não for possível extrair todos os valores necessários
-            if '-----Human Detected-----' in raw_data:
-                logger.info("Detecção humana sem informações detalhadas")
-            elif raw_data.strip():
-                logger.debug(f"Dados incompletos: {raw_data}")
+            logger.warning("❌ Não foi possível extrair coordenadas x,y dos dados")
             return None
             
     except Exception as e:
-        logger.error(f"Erro ao analisar dados seriais: {str(e)}")
+        logger.error(f"❌ Erro ao analisar dados seriais: {str(e)}")
         logger.error(traceback.format_exc())
         return None
 
