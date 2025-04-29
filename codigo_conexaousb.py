@@ -417,6 +417,82 @@ class DatabaseManager:
                 return self.insert_radar_data(data, attempt + 1, max_retries, retry_delay)
             return False
 
+class AnalyticsManager:
+    def __init__(self):
+        # Constantes para cálculo de satisfação
+        self.MOVEMENT_THRESHOLD = 20.0  # cm/s
+        self.DISTANCE_THRESHOLD = 2.0   # metros
+        self.HEART_RATE_NORMAL = (60, 100)  # bpm
+        self.BREATH_RATE_NORMAL = (12, 20)  # rpm
+        
+    def calculate_satisfaction_score(self, move_speed, heart_rate, breath_rate, distance):
+        """
+        Calcula o score de satisfação baseado nos dados do radar
+        Retorna: (score, classificação)
+        """
+        try:
+            score = 0.0
+            
+            # Pontuação baseada na velocidade de movimento
+            if move_speed is not None:
+                if move_speed <= self.MOVEMENT_THRESHOLD:
+                    score += 30  # Pessoa parada/interessada
+                else:
+                    score += max(0, 30 * (1 - move_speed/100))  # Diminui conforme velocidade aumenta
+            
+            # Pontuação baseada na distância
+            if distance is not None:
+                if distance <= self.DISTANCE_THRESHOLD:
+                    score += 20  # Pessoa próxima
+                else:
+                    score += max(0, 20 * (1 - distance/5))  # Diminui conforme distância aumenta
+            
+            # Pontuação baseada nos batimentos cardíacos
+            if heart_rate is not None:
+                if self.HEART_RATE_NORMAL[0] <= heart_rate <= self.HEART_RATE_NORMAL[1]:
+                    score += 25  # Batimentos normais
+                else:
+                    # Penalidade para batimentos muito altos ou baixos
+                    deviation = min(
+                        abs(heart_rate - self.HEART_RATE_NORMAL[0]),
+                        abs(heart_rate - self.HEART_RATE_NORMAL[1])
+                    )
+                    score += max(0, 25 * (1 - deviation/50))
+            
+            # Pontuação baseada na respiração
+            if breath_rate is not None:
+                if self.BREATH_RATE_NORMAL[0] <= breath_rate <= self.BREATH_RATE_NORMAL[1]:
+                    score += 25  # Respiração normal
+                else:
+                    # Penalidade para respiração muito alta ou baixa
+                    deviation = min(
+                        abs(breath_rate - self.BREATH_RATE_NORMAL[0]),
+                        abs(breath_rate - self.BREATH_RATE_NORMAL[1])
+                    )
+                    score += max(0, 25 * (1 - deviation/20))
+            
+            # Classificar satisfação
+            if score >= 85:
+                classification = "MUITO_POSITIVA"
+            elif score >= 70:
+                classification = "POSITIVA"
+            elif score >= 50:
+                classification = "NEUTRA"
+            elif score >= 30:
+                classification = "NEGATIVA"
+            else:
+                classification = "MUITO_NEGATIVA"
+                
+            return (score, classification)
+            
+        except Exception as e:
+            logger.error(f"Erro ao calcular satisfação: {str(e)}")
+            return (50.0, "NEUTRA")  # Valor padrão em caso de erro
+
+class VitalSignsManager:
+    def __init__(self):
+        pass  # Por enquanto sem implementação específica
+
 class SerialRadarManager:
     def __init__(self, port=None, baudrate=115200):
         self.port = port or self.find_serial_port()
