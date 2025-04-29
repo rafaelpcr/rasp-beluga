@@ -34,11 +34,11 @@ def parse_serial_data(raw_data):
     """Analisa os dados brutos da porta serial para extrair informações do radar mmWave"""
     try:
         # Padrões atualizados para corresponder exatamente ao formato do Arduino
-        x_pattern = r'  x_point:\s*([-]?\d+\.\d+)'  # Note os dois espaços no início
-        y_pattern = r'  y_point:\s*([-]?\d+\.\d+)'
-        dop_pattern = r'  dop_index:\s*(\d+)'
-        cluster_pattern = r'  cluster_index:\s*(\d+)'
-        speed_pattern = r'  move_speed:\s*([-]?\d+\.\d+)\s*cm/s'
+        x_pattern = r'x_point:\s*([-]?\d+\.\d+)'
+        y_pattern = r'y_point:\s*([-]?\d+\.\d+)'
+        dop_pattern = r'dop_index:\s*(\d+)'
+        cluster_pattern = r'cluster_index:\s*(\d+)'
+        speed_pattern = r'move_speed:\s*([-]?\d+\.\d+)\s*cm/s'
         total_phase_pattern = r'total_phase:\s*([-]?\d+\.\d+)'
         breath_phase_pattern = r'breath_phase:\s*([-]?\d+\.\d+)'
         heart_phase_pattern = r'heart_phase:\s*([-]?\d+\.\d+)'
@@ -46,16 +46,12 @@ def parse_serial_data(raw_data):
         heart_rate_pattern = r'heart_rate:\s*([-]?\d+\.\d+)'
         distance_pattern = r'distance:\s*([-]?\d+\.\d+)'
         
-        # Log para debug
-        logger.debug("Dados brutos recebidos:")
-        logger.debug(raw_data)
-        
         # Verificar se temos uma detecção humana
         if '-----Human Detected-----' not in raw_data:
             return None
             
         # Verificar se temos informações do alvo
-        if '-----Got Target Info-----' not in raw_data:
+        if 'Target 1:' not in raw_data:
             return None
             
         # Extrair valores usando expressões regulares
@@ -70,12 +66,6 @@ def parse_serial_data(raw_data):
         breath_rate_match = re.search(breath_rate_pattern, raw_data)
         heart_rate_match = re.search(heart_rate_pattern, raw_data)
         distance_match = re.search(distance_pattern, raw_data)
-        
-        # Log para debug dos matches
-        logger.debug(f"Matches encontrados:")
-        logger.debug(f"x_point: {x_match.group(1) if x_match else 'None'}")
-        logger.debug(f"y_point: {y_match.group(1) if y_match else 'None'}")
-        logger.debug(f"speed: {speed_match.group(1) if speed_match else 'None'}")
         
         # Extrair dados obrigatórios
         if x_match and y_match:
@@ -93,14 +83,8 @@ def parse_serial_data(raw_data):
                 'distance': float(distance_match.group(1)) if distance_match else 0.0
             }
             
-            logger.info("✅ Dados extraídos com sucesso:")
-            logger.info(f"   Posição: ({data['x_point']:.2f}, {data['y_point']:.2f})")
-            logger.info(f"   Velocidade: {data['move_speed']:.2f} cm/s")
-            logger.info(f"   Distância: {data['distance']:.2f}m")
-            
             return data
         else:
-            logger.warning("❌ Não foi possível extrair coordenadas x,y dos dados")
             return None
             
     except Exception as e:
@@ -611,17 +595,26 @@ class SerialRadarManager:
         message_mode = False
         message_buffer = ""
         target_data_complete = False
+        last_data_time = time.time()
+        
+        logger.info("\n🔄 Iniciando loop de recebimento de dados...")
         
         while self.is_running:
             try:
                 if not self.serial_connection.is_open:
+                    logger.warning("⚠️ Conexão serial fechada, tentando reconectar...")
                     self.connect()
                     time.sleep(1)
                     continue
                     
                 # Ler dados disponíveis
-                data = self.serial_connection.read(self.serial_connection.in_waiting or 1)
+                in_waiting = self.serial_connection.in_waiting
+                if in_waiting is None:
+                    in_waiting = 0
+                
+                data = self.serial_connection.read(in_waiting or 1)
                 if data:
+                    last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
                     buffer += text
                     
@@ -644,27 +637,19 @@ class SerialRadarManager:
                                 message_buffer += line + '\n'
                                 
                                 # Verificar se a mensagem está completa
-                                if ('breath_rate:' in line or 'breath_rate:' in message_buffer):
+                                if 'distance:' in line:  # Último campo enviado pelo radar
                                     target_data_complete = True
-                                
-                                # Verificar se temos outra detecção (novo Target) - fim da anterior
-                                if target_data_complete and (line.strip() == '' or 'Target' in line and line.startswith('Target')):
                                     # Processar os dados coletados
                                     self.process_radar_data(message_buffer)
-                                    
-                                    # Se for uma linha em branco, finalizar a mensagem
-                                    if line.strip() == '':
-                                        message_mode = False
-                                        message_buffer = ""
-                                        target_data_complete = False
-                                    # Se for outro Target, começar novo ciclo mas manter o modo
-                                    else:
-                                        message_buffer = line + '\n'
-                                        target_data_complete = False
-                            # Outras mensagens não relacionadas à detecção
-                            elif line:
-                                logger.debug(f"Mensagem: {line}")
-                                
+                                    message_mode = False
+                                    message_buffer = ""
+                                    target_data_complete = False
+                            
+                # Verificar se está recebendo dados
+                if time.time() - last_data_time > 5:  # 5 segundos sem dados
+                    logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
+                    last_data_time = time.time()
+                    
                 # Pequena pausa para evitar consumo excessivo de CPU
                 time.sleep(0.01)
                 
@@ -679,7 +664,6 @@ class SerialRadarManager:
             # Converter dados
             converted_data = convert_radar_data(raw_data)
             if not converted_data:
-                logger.warning("⚠️ Não foi possível extrair dados do radar desta mensagem")
                 return
             
             # Adicionar timestamp atual
@@ -721,38 +705,40 @@ class SerialRadarManager:
             converted_data['session_id'] = self.current_session_id
             
             # Exibir dados formatados no terminal
-            logger.info("\n" + "="*50)
-            logger.info("📡 DADOS DO RADAR DETECTADOS")
-            logger.info("="*50)
-            logger.info(f"⏰ Timestamp: {converted_data['timestamp']}")
+            print("\n" + "="*50)
+            print("📡 DADOS DO RADAR DETECTADOS")
+            print("="*50)
+            print(f"⏰ Timestamp: {converted_data['timestamp']}")
             
             if section:
-                logger.info(f"\n📍 LOCALIZAÇÃO:")
-                logger.info(f"   Seção: {section['section_name']}")
-                logger.info(f"   Produto: {section['product_id']}")
+                print(f"\n📍 LOCALIZAÇÃO:")
+                print(f"   Seção: {section['section_name']}")
+                print(f"   Produto: {section['product_id']}")
+            else:
+                print("\n❌ Nenhuma seção detectada para esta posição")
             
-            logger.info(f"\n📊 DADOS DE POSIÇÃO:")
-            logger.info(f"   X: {converted_data.get('x_point', 0):.2f}m")
-            logger.info(f"   Y: {converted_data.get('y_point', 0):.2f}m")
-            logger.info(f"   Distância: {converted_data.get('distance', 0):.2f}m")
-            logger.info(f"   Velocidade: {converted_data.get('move_speed', 0):.2f} cm/s")
+            print(f"\n📊 DADOS DE POSIÇÃO:")
+            print(f"   X: {converted_data.get('x_point', 0):.2f}m")
+            print(f"   Y: {converted_data.get('y_point', 0):.2f}m")
+            print(f"   Distância: {converted_data.get('distance', 0):.2f}m")
+            print(f"   Velocidade: {converted_data.get('move_speed', 0):.2f} cm/s")
             
-            logger.info(f"\n❤️ SINAIS VITAIS:")
-            logger.info(f"   Batimentos: {converted_data.get('heart_rate', 0):.1f} bpm")
-            logger.info(f"   Respiração: {converted_data.get('breath_rate', 0):.1f} rpm")
+            print(f"\n❤️ SINAIS VITAIS:")
+            print(f"   Batimentos: {converted_data.get('heart_rate', 0):.1f} bpm")
+            print(f"   Respiração: {converted_data.get('breath_rate', 0):.1f} rpm")
             
-            logger.info(f"\n🎯 ANÁLISE:")
-            logger.info(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
-            logger.info(f"   Score: {satisfaction_data[0]:.1f}")
-            logger.info(f"   Classificação: {satisfaction_data[1]}")
-            logger.info("="*50)
+            print(f"\n🎯 ANÁLISE:")
+            print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
+            print(f"   Score: {satisfaction_data[0]:.1f}")
+            print(f"   Classificação: {satisfaction_data[1]}")
+            print("="*50)
             
             # Inserir dados no banco
             if self.db_manager:
                 try:
                     success = self.db_manager.insert_radar_data(converted_data)
                     if success:
-                        logger.info("✅ Dados salvos no banco com sucesso!")
+                        logger.debug("✅ Dados salvos no banco com sucesso!")
                     else:
                         logger.error("❌ Falha ao salvar dados no banco")
                 except Exception as e:
