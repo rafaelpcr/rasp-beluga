@@ -315,32 +315,12 @@ class DatabaseManager:
                     product_id VARCHAR(20),
                     timestamp DATETIME,
                     serial_number VARCHAR(20),
-                    total_phase FLOAT,
-                    breath_phase FLOAT,
-                    heart_phase FLOAT,
                     distance FLOAT,
                     dop_index INT,
                     cluster_index INT
                 )
             """)
             self.conn.commit()
-            
-            # Verificar se as novas colunas existem e adicioná-las se necessário
-            try:
-                self.cursor.execute("""
-                    ALTER TABLE radar_dados 
-                    ADD COLUMN IF NOT EXISTS total_phase FLOAT,
-                    ADD COLUMN IF NOT EXISTS breath_phase FLOAT,
-                    ADD COLUMN IF NOT EXISTS heart_phase FLOAT,
-                    ADD COLUMN IF NOT EXISTS distance FLOAT,
-                    ADD COLUMN IF NOT EXISTS dop_index INT,
-                    ADD COLUMN IF NOT EXISTS cluster_index INT
-                """)
-                self.conn.commit()
-                logger.info("✅ Colunas adicionadas/verificadas com sucesso!")
-            except Exception as e:
-                logger.error(f"Erro ao adicionar novas colunas: {str(e)}")
-            
             logger.info("✅ Tabela radar_dados criada/verificada com sucesso!")
 
             # Verificar tabela radar_sessoes
@@ -376,14 +356,14 @@ class DatabaseManager:
     def insert_radar_data(self, data, attempt=0, max_retries=3, retry_delay=1):
         """Insere dados do radar no banco de dados"""
         try:
-            # Query de inserção
+            # Query de inserção (removidas as colunas de fase)
             query = """
                 INSERT INTO radar_dados
                 (x_point, y_point, move_speed, heart_rate, breath_rate, 
                 satisfaction_score, satisfaction_class, is_engaged, engagement_duration,
                 session_id, section_id, product_id, timestamp, serial_number,
-                total_phase, breath_phase, heart_phase, distance, dop_index, cluster_index)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                distance, dop_index, cluster_index)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
             # Calcular duração do engajamento (em segundos)
@@ -400,7 +380,7 @@ class DatabaseManager:
                 engagement_duration = 0
                 self.last_engagement_time = None
             
-            # Preparar parâmetros na mesma ordem da query
+            # Preparar parâmetros na mesma ordem da query (removidos os parâmetros de fase)
             params = [
                 float(data.get('x_point', 0)),            # x_point
                 float(data.get('y_point', 0)),            # y_point
@@ -416,9 +396,6 @@ class DatabaseManager:
                 data.get('product_id', 'UNKNOWN'),        # product_id
                 data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')), # timestamp
                 data.get('serial_number', 'RADAR_1'),     # serial_number
-                float(data.get('total_phase', 0)),        # total_phase
-                float(data.get('breath_phase', 0)),       # breath_phase
-                float(data.get('heart_phase', 0)),        # heart_phase
                 float(data.get('distance', 0)),           # distance
                 int(data.get('dop_index', 0)),           # dop_index
                 int(data.get('cluster_index', 0))         # cluster_index
@@ -431,7 +408,7 @@ class DatabaseManager:
             for i, (param, value) in enumerate(zip(['x_point', 'y_point', 'move_speed', 'heart_rate', 'breath_rate',
                                                   'satisfaction_score', 'satisfaction_class', 'is_engaged', 'engagement_duration',
                                                   'session_id', 'section_id', 'product_id', 'timestamp', 'serial_number',
-                                                  'total_phase', 'breath_phase', 'heart_phase', 'distance', 'dop_index', 'cluster_index'], params)):
+                                                  'distance', 'dop_index', 'cluster_index'], params)):
                 logger.debug(f"   {param}: {value}")
             
             # Executar inserção com retry em caso de deadlock
