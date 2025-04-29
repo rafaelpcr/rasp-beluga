@@ -33,12 +33,18 @@ RANGE_STEP = 2.5  # Valor do RANGE_STEP do código ESP32/Arduino
 def parse_serial_data(raw_data):
     """Analisa os dados brutos da porta serial para extrair informações do radar mmWave"""
     try:
-        # Padrões para extrair valores do texto recebido pela porta serial
+        # Padrões atualizados para o formato real dos dados
         x_pattern = r'x_point:\s*([-]?\d+\.\d+)'
         y_pattern = r'y_point:\s*([-]?\d+\.\d+)'
         speed_pattern = r'move_speed:\s*([-]?\d+\.\d+)\s*cm/s'
         heart_pattern = r'heart_rate:\s*([-]?\d+\.\d+)'
         breath_pattern = r'breath_rate:\s*([-]?\d+\.\d+)'
+        distance_pattern = r'distance:\s*([-]?\d+\.\d+)'
+        
+        # Novos padrões para fases
+        heart_phase_pattern = r'heart_phase:\s*([-]?\d+\.\d+)'
+        breath_phase_pattern = r'breath_phase:\s*([-]?\d+\.\d+)'
+        total_phase_pattern = r'total_phase:\s*([-]?\d+\.\d+)'
         
         # Extrair valores usando expressões regulares
         x_match = re.search(x_pattern, raw_data)
@@ -46,14 +52,20 @@ def parse_serial_data(raw_data):
         speed_match = re.search(speed_pattern, raw_data)
         heart_match = re.search(heart_pattern, raw_data)
         breath_match = re.search(breath_pattern, raw_data)
+        distance_match = re.search(distance_pattern, raw_data)
         
-        if x_match and y_match:
-            # Dados obrigatórios: posição x e y
-            x_point = float(x_match.group(1))
-            y_point = float(y_match.group(1))
+        # Extrair fases
+        heart_phase_match = re.search(heart_phase_pattern, raw_data)
+        breath_phase_match = re.search(breath_phase_pattern, raw_data)
+        total_phase_match = re.search(total_phase_pattern, raw_data)
+        
+        if '-----Human Detected-----' in raw_data and 'Target #1' in raw_data:
+            # Dados obrigatórios
+            x_point = float(x_match.group(1)) if x_match else 0.0
+            y_point = float(y_match.group(1)) if y_match else 0.0
             
-            # Calcular distância
-            distance = math.sqrt(x_point**2 + y_point**2)
+            # Calcular distância do sensor
+            distance = float(distance_match.group(1)) if distance_match else math.sqrt(x_point**2 + y_point**2)
             
             # Velocidade de movimento
             move_speed = float(speed_match.group(1)) if speed_match else 0.0
@@ -62,19 +74,28 @@ def parse_serial_data(raw_data):
             heart_rate = float(heart_match.group(1)) if heart_match else 75.0
             breath_rate = float(breath_match.group(1)) if breath_match else 15.0
             
+            # Dados adicionais de fase
+            heart_phase = float(heart_phase_match.group(1)) if heart_phase_match else 0.0
+            breath_phase = float(breath_phase_match.group(1)) if breath_phase_match else 0.0
+            total_phase = float(total_phase_match.group(1)) if total_phase_match else 0.0
+            
+            logger.debug(f"Dados extraídos com sucesso: x={x_point}, y={y_point}, speed={move_speed}")
+            
             return {
                 'x_point': x_point,
                 'y_point': y_point,
                 'move_speed': move_speed,
                 'heart_rate': heart_rate,
                 'breath_rate': breath_rate,
-                'distance': distance
+                'distance': distance,
+                'heart_phase': heart_phase,
+                'breath_phase': breath_phase,
+                'total_phase': total_phase
             }
         else:
             # Se não for possível extrair todos os valores necessários
             if '-----Human Detected-----' in raw_data:
                 logger.info("Detecção humana sem informações detalhadas")
-                return None
             elif raw_data.strip():
                 logger.debug(f"Dados incompletos: {raw_data}")
             return None
@@ -365,7 +386,7 @@ class DatabaseManager:
                 bool(data.get('is_engaged', False)),
                 int(data.get('engagement_duration', 0)),
                 data.get('session_id'),
-                int(data.get('section_id', 1)) if data.get('section_id') else None,
+                data.get('section_id'),  # Pode ser None
                 data.get('product_id', 'UNKNOWN'),
                 data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
                 data.get('serial_number', 'RADAR_1')
@@ -395,193 +416,6 @@ class DatabaseManager:
                 time.sleep(retry_delay)
                 return self.insert_radar_data(data, attempt + 1, max_retries, retry_delay)
             return False
-
-class AnalyticsManager:
-    def __init__(self):
-        # Constantes para engajamento
-        self.ENGAGEMENT_TIME_THRESHOLD = 5  # segundos
-        self.MOVEMENT_THRESHOLD = 20.0  # limite para considerar "parado" em cm/s
-        self.ENGAGEMENT_MIN_DURATION = 5  # duração mínima para considerar engajamento completo
-        
-        # Rastreamento de engajamento
-        self.engagement_start_time = None
-        self.last_movement_time = None
-        
-        # Gerenciador de sinais vitais
-        self.vital_signs_manager = VitalSignsManager()
-        
-        # Histórico para análise de tendências
-        self.satisfaction_history = []
-        self.MAX_HISTORY = 20
-
-    def calculate_satisfaction_score(self, move_speed, heart_rate, breath_rate, distance):
-        """
-        Calcula o score de satisfação baseado nas métricas do radar
-        Considera a distância para ajustar os pesos
-        """
-        try:
-            # Processar sinais vitais
-            heart_rate, breath_rate = self.vital_signs_manager.process_vital_signs(
-                heart_rate, breath_rate, distance
-            )
-            
-            # Normalizar as métricas para uma escala de 0-1
-            move_speed_norm = min(1.0, move_speed / 30.0)  # Velocidade máxima considerada: 30 cm/s
-            
-            # Ajustar pesos baseado na distância
-            distance_factor = min(1.0, distance / 2.0)  # Considerar até 2 metros
-            move_speed_weight = 0.6 * (1 - 0.2 * distance_factor)  # Reduzir peso da velocidade com distância
-            vital_signs_weight = 0.4 * (1 + 0.2 * distance_factor)  # Aumentar peso dos sinais vitais com distância
-            
-            # Calcular score ponderado (0-100)
-            score = 100 * (
-                move_speed_weight * (1 - move_speed_norm) +  # Menor velocidade = maior satisfação
-                vital_signs_weight * 0.5  # Valor médio para sinais vitais
-            )
-            
-            # Adicionar ao histórico
-            self.satisfaction_history.append(score)
-            if len(self.satisfaction_history) > self.MAX_HISTORY:
-                self.satisfaction_history.pop(0)
-                
-            # Ajustar score baseado na tendência
-            if len(self.satisfaction_history) >= 5:
-                trend = np.polyfit(range(len(self.satisfaction_history)), self.satisfaction_history, 1)[0]
-                score = score * (1 + 0.1 * trend)  # Ajustar até 10% baseado na tendência
-            
-            # Classificar o score com níveis mais granulares
-            if score >= 85:
-                satisfaction_class = 'Muito Satisfeito'
-            elif score >= 70:
-                satisfaction_class = 'Satisfeito'
-            elif score >= 55:
-                satisfaction_class = 'Levemente Satisfeito'
-            elif score >= 40:
-                satisfaction_class = 'Neutro'
-            elif score >= 25:
-                satisfaction_class = 'Levemente Insatisfeito'
-            elif score >= 10:
-                satisfaction_class = 'Insatisfeito'
-            else:
-                satisfaction_class = 'Muito Insatisfeito'
-                
-            return score, satisfaction_class
-            
-        except Exception as e:
-            logger.error(f"❌ Erro ao calcular satisfação: {str(e)}")
-            logger.error(traceback.format_exc())
-            return 50, 'Neutro'  # Valor padrão em caso de erro
-
-class VitalSignsManager:
-    def __init__(self):
-        # Constantes para validação
-        self.HEART_RATE_MIN = 40
-        self.HEART_RATE_MAX = 180
-        self.BREATH_RATE_MIN = 8
-        self.BREATH_RATE_MAX = 30
-        
-        # Histórico para filtragem
-        self.heart_rate_history = []
-        self.breath_rate_history = []
-        self.MAX_HISTORY = 10
-        
-        # Filtros
-        self.heart_rate_filter = []
-        self.breath_rate_filter = []
-        self.FILTER_WINDOW = 5
-        
-        # Calibração
-        self.calibration_data = {
-            'heart_rate': {'min': None, 'max': None, 'baseline': None},
-            'breath_rate': {'min': None, 'max': None, 'baseline': None}
-        }
-        self.is_calibrated = False
-        
-    def calibrate(self, heart_rate_samples, breath_rate_samples):
-        """Calibra o sistema com amostras iniciais"""
-        try:
-            if len(heart_rate_samples) >= 5 and len(breath_rate_samples) >= 5:
-                # Calcular estatísticas para frequência cardíaca
-                self.calibration_data['heart_rate']['min'] = min(heart_rate_samples)
-                self.calibration_data['heart_rate']['max'] = max(heart_rate_samples)
-                self.calibration_data['heart_rate']['baseline'] = sum(heart_rate_samples) / len(heart_rate_samples)
-                
-                # Calcular estatísticas para frequência respiratória
-                self.calibration_data['breath_rate']['min'] = min(breath_rate_samples)
-                self.calibration_data['breath_rate']['max'] = max(breath_rate_samples)
-                self.calibration_data['breath_rate']['baseline'] = sum(breath_rate_samples) / len(breath_rate_samples)
-                
-                self.is_calibrated = True
-                logger.info("✅ Sistema calibrado com sucesso!")
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"❌ Erro na calibração: {str(e)}")
-            return False
-            
-    def apply_median_filter(self, values):
-        """Aplica filtro de mediana para remover ruídos"""
-        if len(values) < self.FILTER_WINDOW:
-            return values[-1] if values else None
-            
-        window = values[-self.FILTER_WINDOW:]
-        return sorted(window)[len(window)//2]
-        
-    def validate_heart_rate(self, value, distance):
-        """Valida a frequência cardíaca considerando a distância"""
-        if not self.is_calibrated:
-            return self.HEART_RATE_MIN <= value <= self.HEART_RATE_MAX
-            
-        # Ajustar limites baseado na distância
-        distance_factor = min(1.0, distance / 2.0)  # Considerar até 2 metros
-        adjusted_min = self.calibration_data['heart_rate']['min'] * (1 - 0.2 * distance_factor)
-        adjusted_max = self.calibration_data['heart_rate']['max'] * (1 + 0.2 * distance_factor)
-        
-        return adjusted_min <= value <= adjusted_max
-        
-    def validate_breath_rate(self, value, distance):
-        """Valida a frequência respiratória considerando a distância"""
-        if not self.is_calibrated:
-            return self.BREATH_RATE_MIN <= value <= self.BREATH_RATE_MAX
-            
-        # Ajustar limites baseado na distância
-        distance_factor = min(1.0, distance / 2.0)
-        adjusted_min = self.calibration_data['breath_rate']['min'] * (1 - 0.3 * distance_factor)
-        adjusted_max = self.calibration_data['breath_rate']['max'] * (1 + 0.3 * distance_factor)
-        
-        return adjusted_min <= value <= adjusted_max
-        
-    def process_vital_signs(self, heart_rate, breath_rate, distance):
-        """Processa e valida os sinais vitais"""
-        try:
-            # Adicionar ao histórico
-            self.heart_rate_history.append(heart_rate)
-            self.breath_rate_history.append(breath_rate)
-            
-            # Manter histórico limitado
-            if len(self.heart_rate_history) > self.MAX_HISTORY:
-                self.heart_rate_history.pop(0)
-            if len(self.breath_rate_history) > self.MAX_HISTORY:
-                self.breath_rate_history.pop(0)
-                
-            # Aplicar filtro de mediana
-            filtered_heart_rate = self.apply_median_filter(self.heart_rate_history)
-            filtered_breath_rate = self.apply_median_filter(self.breath_rate_history)
-            
-            # Validar valores filtrados
-            if not self.validate_heart_rate(filtered_heart_rate, distance):
-                logger.warning(f"Frequência cardíaca inválida: {filtered_heart_rate} (distância: {distance}m)")
-                filtered_heart_rate = self.calibration_data['heart_rate']['baseline'] if self.is_calibrated else 75.0
-                
-            if not self.validate_breath_rate(filtered_breath_rate, distance):
-                logger.warning(f"Frequência respiratória inválida: {filtered_breath_rate} (distância: {distance}m)")
-                filtered_breath_rate = self.calibration_data['breath_rate']['baseline'] if self.is_calibrated else 15.0
-                
-            return filtered_heart_rate, filtered_breath_rate
-            
-        except Exception as e:
-            logger.error(f"❌ Erro no processamento de sinais vitais: {str(e)}")
-            return 75.0, 15.0  # Valores padrão em caso de erro
 
 class SerialRadarManager:
     def __init__(self, port=None, baudrate=115200):
@@ -743,8 +577,8 @@ class SerialRadarManager:
     def process_radar_data(self, raw_data):
         """Processa dados brutos do radar recebidos pela serial"""
         logger.info("="*50)
-        logger.info("📡 Dados recebidos pela porta serial")
-        logger.info(f"Dados brutos: {raw_data[:100]}...")  # Mostrar apenas o início para não poluir o log
+        logger.info("📡 NOVOS DADOS RECEBIDOS")
+        logger.info("="*50)
         
         # Converter dados
         converted_data = convert_radar_data(raw_data)
@@ -752,9 +586,9 @@ class SerialRadarManager:
             logger.warning("⚠️ Não foi possível extrair dados do radar desta mensagem")
             return
             
-        # Adicionar timestamp
-        current_time = datetime.now()
-        converted_data['timestamp'] = current_time.strftime('%Y-%m-%d %H:%M:%S')
+        # Adicionar timestamp atual
+        converted_data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"⏰ Timestamp: {converted_data['timestamp']}")
         
         # Identificar seção baseado na posição
         section = shelf_manager.get_section_at_position(
@@ -766,11 +600,12 @@ class SerialRadarManager:
         if section:
             converted_data['section_id'] = section['section_id']
             converted_data['product_id'] = section['product_id']
-            logger.info(f"📍 Seção detectada: {section['section_name']} (Produto: {section['product_id']})")
+            logger.info(f"📍 Seção: {section['section_name']}")
+            logger.info(f"📦 Produto: {section['product_id']}")
         else:
             converted_data['section_id'] = None
             converted_data['product_id'] = None
-            logger.info("❌ Nenhuma seção detectada para esta posição")
+            logger.warning("❌ Nenhuma seção detectada para esta posição")
             
         # Calcular satisfação
         satisfaction_data = self.analytics_manager.calculate_satisfaction_score(
@@ -788,9 +623,16 @@ class SerialRadarManager:
         converted_data['is_engaged'] = is_engaged
         
         # Log dos dados calculados
-        logger.info(f"Dados processados: {converted_data}")
-        logger.info(f"Dados de engajamento: engajado={is_engaged}")
-        logger.info(f"Dados de satisfação: score={satisfaction_data[0]}, class={satisfaction_data[1]}")
+        logger.info("\n📊 DADOS PROCESSADOS:")
+        logger.info(f"   Posição X: {converted_data['x_point']:.2f}m")
+        logger.info(f"   Posição Y: {converted_data['y_point']:.2f}m")
+        logger.info(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
+        logger.info(f"   Batimentos: {converted_data['heart_rate']:.1f} bpm")
+        logger.info(f"   Respiração: {converted_data['breath_rate']:.1f} rpm")
+        logger.info(f"\n🎯 STATUS:")
+        logger.info(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
+        logger.info(f"   Satisfação: {satisfaction_data[0]:.1f} ({satisfaction_data[1]})")
+        logger.info("="*50)
         
         # Inserir dados no banco
         if self.db_manager:
