@@ -142,6 +142,10 @@ class ShelfManager:
         self.MAX_SECTIONS_X = 4    # Número máximo de seções na horizontal
         self.MAX_SECTIONS_Y = 3    # Número máximo de seções na vertical
         
+    def convert_cm_to_m(self, value):
+        """Converte centímetros para metros"""
+        return value / 100.0
+        
     def initialize_database(self, db_manager):
         """Inicializa a tabela de seções da gôndola"""
         try:
@@ -171,6 +175,12 @@ class ShelfManager:
     def get_section_at_position(self, x, y, db_manager):
         """Identifica a seção baseada nas coordenadas (x, y)"""
         try:
+            # Converter coordenadas de cm para m
+            x_m = self.convert_cm_to_m(x)
+            y_m = self.convert_cm_to_m(y)
+            
+            logger.debug(f"Buscando seção para posição ({x_m:.2f}m, {y_m:.2f}m) [original: ({x}cm, {y}cm)]")
+            
             query = """
                 SELECT id, section_name, product_id, x_start, x_end, y_start, y_end 
                 FROM shelf_sections 
@@ -178,11 +188,11 @@ class ShelfManager:
                 AND y_start <= %s AND y_end >= %s 
                 AND is_active = TRUE
             """
-            db_manager.cursor.execute(query, (x, x, y, y))
+            db_manager.cursor.execute(query, (x_m, x_m, y_m, y_m))
             result = db_manager.cursor.fetchone()
             
             if result:
-                return {
+                section = {
                     'section_id': result[0],
                     'section_name': result[1],
                     'product_id': result[2],
@@ -191,10 +201,16 @@ class ShelfManager:
                     'y_start': result[5],
                     'y_end': result[6]
                 }
+                logger.info(f"Seção encontrada: {section['section_name']} (ID: {section['section_id']})")
+                logger.debug(f"Coordenadas da seção: ({section['x_start']}m,{section['y_start']}m) - ({section['x_end']}m,{section['y_end']}m)")
+                return section
+                
+            logger.warning(f"Nenhuma seção encontrada para posição ({x_m:.2f}m, {y_m:.2f}m)")
             return None
             
         except Exception as e:
             logger.error(f"Erro ao buscar seção: {str(e)}")
+            logger.error(traceback.format_exc())
             return None
         
     def add_section(self, section_data, db_manager):
@@ -254,39 +270,40 @@ class ShelfManager:
         try:
             logger.info("Iniciando a inicialização das seções...")
             
-            # Seções padrão
+            # Seções padrão (coordenadas em metros)
             default_sections = [
                 {
                     'section_name': 'Granolas Premium',
                     'product_id': '1',
                     'product_name': 'Granola Premium',
-                    'x_start': 0,
-                    'y_start': 0,
-                    'x_end': 33,
-                    'y_end': 100
+                    'x_start': 0.0,
+                    'y_start': 0.0,
+                    'x_end': 0.33,
+                    'y_end': 1.0
                 },
                 {
                     'section_name': 'Mix de Frutas Secas',
                     'product_id': '2',
                     'product_name': 'Mix de Frutas Secas',
-                    'x_start': 34,
-                    'y_start': 0,
-                    'x_end': 66,
-                    'y_end': 100
+                    'x_start': 0.34,
+                    'y_start': 0.0,
+                    'x_end': 0.66,
+                    'y_end': 1.0
                 },
                 {
                     'section_name': 'Barras de Cereais',
                     'product_id': '3',
                     'product_name': 'Barras de Cereais',
-                    'x_start': 67,
-                    'y_start': 0,
-                    'x_end': 100,
-                    'y_end': 100
+                    'x_start': 0.67,
+                    'y_start': 0.0,
+                    'x_end': 1.0,
+                    'y_end': 1.0
                 }
             ]
             
             for section in default_sections:
                 logger.info(f"Adicionando seção: {section['section_name']}")
+                logger.debug(f"Coordenadas: ({section['x_start']}m,{section['y_start']}m) - ({section['x_end']}m,{section['y_end']}m)")
                 self.add_section(section, db_manager)
                 
             logger.info("Inicialização das seções concluída com sucesso!")
