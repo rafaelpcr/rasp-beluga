@@ -850,14 +850,27 @@ class SerialRadarManager:
                 data.get('heart_phase', 0)
             )
             
+            # Calcular distância se não foi fornecida
+            distance = data.get('distance', 0)
+            if distance == 0:
+                # Calcular distância usando coordenadas x e y
+                x = data.get('x_point', 0)
+                y = data.get('y_point', 0)
+                distance = (x**2 + y**2)**0.5  # Teorema de Pitágoras
+                logger.debug(f"Distância calculada: {distance:.2f}cm")
+            
+            # Calcular velocidade de movimento usando dop_index
+            dop_index = data.get('dop_index', 0)
+            move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else 0
+            logger.debug(f"Velocidade calculada: {move_speed:.2f}cm/s (dop_index: {dop_index})")
+            
             # Criar dicionário com dados convertidos
             converted_data = {
                 'x_point': data.get('x_point', 0),
                 'y_point': data.get('y_point', 0),
-                'move_speed': data.get('move_speed', 0),
-                'distance': data.get('distance', 0),
-                'dop_index': data.get('dop_index', 0),
-                'cluster_index': data.get('cluster_index', 0),
+                'move_speed': move_speed,
+                'distance': distance,
+                'dop_index': dop_index,
                 'heart_rate': heart_rate if heart_rate is not None else None,
                 'breath_rate': breath_rate if breath_rate is not None else None,
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -914,11 +927,11 @@ class SerialRadarManager:
                 print(f"   Produto: {section['product_id']}")
             else:
                 print("\n❌ Nenhuma seção detectada para esta posição")
+                print(f"   X: {converted_data['x_point']:.2f}cm")
+                print(f"   Y: {converted_data['y_point']:.2f}cm")
             
             print(f"\n📊 DADOS DE POSIÇÃO:")
-            print(f"   X: {converted_data['x_point']:.2f}m")
-            print(f"   Y: {converted_data['y_point']:.2f}m")
-            print(f"   Distância: {converted_data['distance']:.2f}m")
+            print(f"   Distância: {converted_data['distance']:.2f}cm")
             print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
             
             print(f"\n❤️ SINAIS VITAIS:")
