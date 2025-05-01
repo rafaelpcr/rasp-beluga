@@ -872,8 +872,8 @@ class SerialRadarManager:
                 'move_speed': move_speed,
                 'distance': distance,
                 'dop_index': dop_index,
-                'heart_rate': heart_rate if heart_rate is not None else None,
-                'breath_rate': breath_rate if breath_rate is not None else None,
+                'heart_rate': heart_rate if heart_rate is not None else 75.0,  # Valor padrão se inválido
+                'breath_rate': breath_rate if breath_rate is not None else 15.0,  # Valor padrão se inválido
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
             
@@ -891,12 +891,7 @@ class SerialRadarManager:
                 converted_data['section_id'] = None
                 converted_data['product_id'] = None
             
-            # Se não temos dados vitais válidos, pular esta leitura
-            if converted_data['heart_rate'] is None or converted_data['breath_rate'] is None:
-                logger.warning("Dados vitais inválidos ou insuficientes, aguardando próxima leitura...")
-                return
-            
-            # Calcular satisfação
+            # Calcular satisfação mesmo sem dados vitais válidos
             satisfaction_data = self.analytics_manager.calculate_satisfaction_score(
                 converted_data['move_speed'],
                 converted_data['heart_rate'],
@@ -922,22 +917,24 @@ class SerialRadarManager:
             print("="*50)
             print(f"⏰ Timestamp: {converted_data['timestamp']}")
             
+            print(f"\n📊 DADOS DE POSIÇÃO:")
+            print(f"   X: {converted_data['x_point']:.2f}cm")
+            print(f"   Y: {converted_data['y_point']:.2f}cm")
+            print(f"   Distância: {converted_data['distance']:.2f}cm")
+            print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
+            
             if section:
                 print(f"\n📍 LOCALIZAÇÃO:")
                 print(f"   Seção: {section['section_name']}")
                 print(f"   Produto: {section['product_id']}")
-            else:
-                print("\n❌ Nenhuma seção detectada para esta posição")
-                print(f"   X: {converted_data['x_point']:.2f}cm")
-                print(f"   Y: {converted_data['y_point']:.2f}cm")
-            
-            print(f"\n📊 DADOS DE POSIÇÃO:")
-            print(f"   Distância: {converted_data['distance']:.2f}cm")
-            print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
+                print(f"   Coordenadas da seção: ({section['x_start']}m,{section['y_start']}m) - ({section['x_end']}m,{section['y_end']}m)")
             
             print(f"\n❤️ SINAIS VITAIS:")
-            print(f"   Batimentos: {converted_data['heart_rate']:.1f} bpm")
-            print(f"   Respiração: {converted_data['breath_rate']:.1f} rpm")
+            if heart_rate is not None and breath_rate is not None:
+                print(f"   Batimentos: {converted_data['heart_rate']:.1f} bpm")
+                print(f"   Respiração: {converted_data['breath_rate']:.1f} rpm")
+            else:
+                print("   Dados vitais indisponíveis")
             
             print(f"\n🎯 ANÁLISE:")
             print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
