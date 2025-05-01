@@ -192,14 +192,15 @@ class ShelfManager:
             result = db_manager.cursor.fetchone()
             
             if result:
+                # Acessar os campos pelo nome já que o cursor é dictionary=True
                 section = {
-                    'section_id': result[0],
-                    'section_name': result[1],
-                    'product_id': result[2],
-                    'x_start': result[3],
-                    'x_end': result[4],
-                    'y_start': result[5],
-                    'y_end': result[6]
+                    'section_id': result['id'],
+                    'section_name': result['section_name'],
+                    'product_id': result['product_id'],
+                    'x_start': result['x_start'],
+                    'x_end': result['x_end'],
+                    'y_start': result['y_start'],
+                    'y_end': result['y_end']
                 }
                 logger.info(f"Seção encontrada: {section['section_name']} (ID: {section['section_id']})")
                 logger.debug(f"Coordenadas da seção: ({section['x_start']}m,{section['y_start']}m) - ({section['x_end']}m,{section['y_end']}m)")
