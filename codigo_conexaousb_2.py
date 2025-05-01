@@ -434,14 +434,14 @@ class DatabaseManager:
     def insert_radar_data(self, data, attempt=0, max_retries=3, retry_delay=1):
         """Insere dados do radar no banco de dados"""
         try:
-            # Query de inserção (removidas as colunas de fase)
+            # Query de inserção
             query = """
                 INSERT INTO radar_dados
                 (x_point, y_point, move_speed, heart_rate, breath_rate, 
                 satisfaction_score, satisfaction_class, is_engaged, engagement_duration,
                 session_id, section_id, product_id, timestamp, serial_number,
-                distance, dop_index, cluster_index)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                distance, dop_index)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
             # Calcular duração do engajamento (em segundos)
@@ -458,36 +458,36 @@ class DatabaseManager:
                 engagement_duration = 0
                 self.last_engagement_time = None
             
-            # Preparar parâmetros na mesma ordem da query (removidos os parâmetros de fase)
+            # Preparar parâmetros garantindo que valores None não sejam convertidos para float
             params = [
-                float(data.get('x_point', 0)),            # x_point
-                float(data.get('y_point', 0)),            # y_point
-                float(data.get('move_speed', 0)),         # move_speed
-                float(data.get('heart_rate', 0)),         # heart_rate
-                float(data.get('breath_rate', 0)),        # breath_rate
-                float(data.get('satisfaction_score', 0)),  # satisfaction_score
-                data.get('satisfaction_class', 'NEUTRA'),  # satisfaction_class
-                bool(data.get('is_engaged', False)),      # is_engaged
-                engagement_duration,                       # engagement_duration
-                data.get('session_id', str(uuid.uuid4())), # session_id
-                data.get('section_id'),                   # section_id
-                data.get('product_id', 'UNKNOWN'),        # product_id
-                data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')), # timestamp
-                data.get('serial_number', 'RADAR_1'),     # serial_number
-                float(data.get('distance', 0)),           # distance
-                int(data.get('dop_index', 0)),           # dop_index
-                int(data.get('cluster_index', 0))         # cluster_index
+                float(data.get('x_point', 0)),
+                float(data.get('y_point', 0)),
+                float(data.get('move_speed', 0)),
+                data.get('heart_rate'),  # Manter como None se não houver valor
+                data.get('breath_rate'),  # Manter como None se não houver valor
+                float(data.get('satisfaction_score', 50.0)),
+                data.get('satisfaction_class', 'NEUTRA'),
+                bool(data.get('is_engaged', False)),
+                engagement_duration,
+                data.get('session_id', str(uuid.uuid4())),
+                data.get('section_id'),
+                data.get('product_id', 'UNKNOWN'),
+                data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+                data.get('serial_number', 'RADAR_1'),
+                float(data.get('distance', 0)),
+                int(data.get('dop_index', 0))
             ]
             
             # Log detalhado para debug
             logger.debug("Executando query de inserção:")
             logger.debug(f"Query: {query}")
             logger.debug("Parâmetros:")
-            for i, (param, value) in enumerate(zip(['x_point', 'y_point', 'move_speed', 'heart_rate', 'breath_rate',
-                                                  'satisfaction_score', 'satisfaction_class', 'is_engaged', 'engagement_duration',
-                                                  'session_id', 'section_id', 'product_id', 'timestamp', 'serial_number',
-                                                  'distance', 'dop_index', 'cluster_index'], params)):
-                logger.debug(f"   {param}: {value}")
+            param_names = ['x_point', 'y_point', 'move_speed', 'heart_rate', 'breath_rate',
+                         'satisfaction_score', 'satisfaction_class', 'is_engaged', 'engagement_duration',
+                         'session_id', 'section_id', 'product_id', 'timestamp', 'serial_number',
+                         'distance', 'dop_index']
+            for name, value in zip(param_names, params):
+                logger.debug(f"   {name}: {value} (tipo: {type(value)})")
             
             # Executar inserção com retry em caso de deadlock
             try:
