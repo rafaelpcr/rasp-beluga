@@ -137,14 +137,15 @@ def convert_radar_data(raw_data):
 class ShelfManager:
     def __init__(self):
         # Constantes para mapeamento de seções
-        self.SECTION_WIDTH = 0.5  # Largura de cada seção em metros
-        self.SECTION_HEIGHT = 0.3  # Altura de cada seção em metros
+        self.SECTION_WIDTH = 50  # Largura de cada seção em centímetros
+        self.SECTION_HEIGHT = 30  # Altura de cada seção em centímetros
         self.MAX_SECTIONS_X = 4    # Número máximo de seções na horizontal
         self.MAX_SECTIONS_Y = 3    # Número máximo de seções na vertical
+        self.SCALE_FACTOR = 100    # Fator de escala para ajustar coordenadas do radar
         
-    def convert_cm_to_m(self, value):
-        """Converte centímetros para metros"""
-        return value / 100.0
+    def adjust_scale(self, value):
+        """Ajusta a escala das coordenadas do radar"""
+        return value * self.SCALE_FACTOR
         
     def initialize_database(self, db_manager):
         """Inicializa a tabela de seções da gôndola"""
@@ -175,38 +176,38 @@ class ShelfManager:
     def get_section_at_position(self, x, y, db_manager):
         """Identifica a seção baseada nas coordenadas (x, y)"""
         try:
-            # Converter coordenadas de cm para m
-            x_m = self.convert_cm_to_m(x)
-            y_m = self.convert_cm_to_m(y)
+            # Ajustar escala das coordenadas
+            x_adjusted = self.adjust_scale(x)
+            y_adjusted = self.adjust_scale(y)
             
-            logger.debug(f"Buscando seção para posição ({x_m:.2f}m, {y_m:.2f}m) [original: ({x}cm, {y}cm)]")
+            logger.debug(f"Coordenadas originais: ({x:.2f}cm, {y:.2f}cm)")
+            logger.debug(f"Coordenadas ajustadas: ({x_adjusted:.2f}cm, {y_adjusted:.2f}cm)")
             
             query = """
                 SELECT id, section_name, product_id, x_start, x_end, y_start, y_end 
                 FROM shelf_sections 
-                WHERE x_start <= %s AND x_end >= %s 
-                AND y_start <= %s AND y_end >= %s 
+                WHERE x_start * 100 <= %s AND x_end * 100 >= %s 
+                AND y_start * 100 <= %s AND y_end * 100 >= %s 
                 AND is_active = TRUE
             """
-            db_manager.cursor.execute(query, (x_m, x_m, y_m, y_m))
+            db_manager.cursor.execute(query, (x_adjusted, x_adjusted, y_adjusted, y_adjusted))
             result = db_manager.cursor.fetchone()
             
             if result:
-                # Acessar os campos pelo nome já que o cursor é dictionary=True
                 section = {
                     'section_id': result['id'],
                     'section_name': result['section_name'],
                     'product_id': result['product_id'],
-                    'x_start': result['x_start'],
-                    'x_end': result['x_end'],
-                    'y_start': result['y_start'],
-                    'y_end': result['y_end']
+                    'x_start': self.adjust_scale(result['x_start']),
+                    'x_end': self.adjust_scale(result['x_end']),
+                    'y_start': self.adjust_scale(result['y_start']),
+                    'y_end': self.adjust_scale(result['y_end'])
                 }
                 logger.info(f"Seção encontrada: {section['section_name']} (ID: {section['section_id']})")
-                logger.debug(f"Coordenadas da seção: ({section['x_start']}m,{section['y_start']}m) - ({section['x_end']}m,{section['y_end']}m)")
+                logger.debug(f"Coordenadas da seção: ({section['x_start']:.1f}cm,{section['y_start']:.1f}cm) - ({section['x_end']:.1f}cm,{section['y_end']:.1f}cm)")
                 return section
                 
-            logger.warning(f"Nenhuma seção encontrada para posição ({x_m:.2f}m, {y_m:.2f}m)")
+            logger.warning(f"Nenhuma seção encontrada para posição ({x:.2f}cm, {y:.2f}cm)")
             return None
             
         except Exception as e:
@@ -271,7 +272,7 @@ class ShelfManager:
         try:
             logger.info("Iniciando a inicialização das seções...")
             
-            # Seções padrão (coordenadas em metros)
+            # Seções padrão (coordenadas em metros no banco)
             default_sections = [
                 {
                     'section_name': 'Granolas Premium',
@@ -279,26 +280,26 @@ class ShelfManager:
                     'product_name': 'Granola Premium',
                     'x_start': 0.0,
                     'y_start': 0.0,
-                    'x_end': 0.33,
-                    'y_end': 1.0
+                    'x_end': 0.5,
+                    'y_end': 0.3
                 },
                 {
                     'section_name': 'Mix de Frutas Secas',
                     'product_id': '2',
                     'product_name': 'Mix de Frutas Secas',
-                    'x_start': 0.34,
+                    'x_start': 0.5,
                     'y_start': 0.0,
-                    'x_end': 0.66,
-                    'y_end': 1.0
+                    'x_end': 1.0,
+                    'y_end': 0.3
                 },
                 {
                     'section_name': 'Barras de Cereais',
                     'product_id': '3',
                     'product_name': 'Barras de Cereais',
-                    'x_start': 0.67,
+                    'x_start': 1.0,
                     'y_start': 0.0,
-                    'x_end': 1.0,
-                    'y_end': 1.0
+                    'x_end': 1.5,
+                    'y_end': 0.3
                 }
             ]
             
@@ -927,7 +928,7 @@ class SerialRadarManager:
                 print(f"\n📍 LOCALIZAÇÃO:")
                 print(f"   Seção: {section['section_name']}")
                 print(f"   Produto: {section['product_id']}")
-                print(f"   Coordenadas da seção: ({section['x_start']}m,{section['y_start']}m) - ({section['x_end']}m,{section['y_end']}m)")
+                print(f"   Coordenadas da seção: ({section['x_start']:.1f}cm,{section['y_start']:.1f}cm) - ({section['x_end']:.1f}cm,{section['y_end']:.1f}cm)")
             
             print(f"\n❤️ SINAIS VITAIS:")
             if heart_rate is not None and breath_rate is not None:
