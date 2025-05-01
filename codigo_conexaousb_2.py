@@ -873,8 +873,8 @@ class SerialRadarManager:
                 'move_speed': move_speed,
                 'distance': distance,
                 'dop_index': dop_index,
-                'heart_rate': heart_rate if heart_rate is not None else 75.0,  # Valor padrão se inválido
-                'breath_rate': breath_rate if breath_rate is not None else 15.0,  # Valor padrão se inválido
+                'heart_rate': heart_rate,  # Usar valor real ou None
+                'breath_rate': breath_rate,  # Usar valor real ou None
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
             
@@ -892,16 +892,28 @@ class SerialRadarManager:
                 converted_data['section_id'] = None
                 converted_data['product_id'] = None
             
-            # Calcular satisfação mesmo sem dados vitais válidos
-            satisfaction_data = self.analytics_manager.calculate_satisfaction_score(
-                converted_data['move_speed'],
-                converted_data['heart_rate'],
-                converted_data['breath_rate'],
-                converted_data['distance']
-            )
-            
-            converted_data['satisfaction_score'] = satisfaction_data[0]
-            converted_data['satisfaction_class'] = satisfaction_data[1]
+            # Verificar se temos dados vitais válidos
+            if heart_rate is None or breath_rate is None:
+                logger.warning("Dados vitais inválidos ou insuficientes, aguardando próxima leitura...")
+                # Calcular satisfação apenas com dados de movimento e distância
+                satisfaction_data = self.analytics_manager.calculate_satisfaction_score(
+                    converted_data['move_speed'],
+                    None,  # heart_rate não disponível
+                    None,  # breath_rate não disponível
+                    converted_data['distance']
+                )
+                converted_data['satisfaction_class'] = "NEUTRA"
+                converted_data['satisfaction_score'] = 50.0  # Score neutro
+            else:
+                # Calcular satisfação com todos os dados disponíveis
+                satisfaction_data = self.analytics_manager.calculate_satisfaction_score(
+                    converted_data['move_speed'],
+                    converted_data['heart_rate'],
+                    converted_data['breath_rate'],
+                    converted_data['distance']
+                )
+                converted_data['satisfaction_score'] = satisfaction_data[0]
+                converted_data['satisfaction_class'] = satisfaction_data[1]
             
             # Calcular engajamento
             is_engaged = converted_data['move_speed'] <= self.analytics_manager.MOVEMENT_THRESHOLD
@@ -918,29 +930,30 @@ class SerialRadarManager:
             print("="*50)
             print(f"⏰ Timestamp: {converted_data['timestamp']}")
             
+            if section:
+                print(f"\n📍 LOCALIZAÇÃO:")
+                print(f"   Seção: {section['section_name']}")
+                print(f"   Produto: {section['product_id']}")
+            else:
+                print("\n❌ Nenhuma seção detectada para esta posição")
+            
             print(f"\n📊 DADOS DE POSIÇÃO:")
             print(f"   X: {converted_data['x_point']:.2f}cm")
             print(f"   Y: {converted_data['y_point']:.2f}cm")
             print(f"   Distância: {converted_data['distance']:.2f}cm")
             print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
             
-            if section:
-                print(f"\n📍 LOCALIZAÇÃO:")
-                print(f"   Seção: {section['section_name']}")
-                print(f"   Produto: {section['product_id']}")
-                print(f"   Coordenadas da seção: ({section['x_start']:.1f}cm,{section['y_start']:.1f}cm) - ({section['x_end']:.1f}cm,{section['y_end']:.1f}cm)")
-            
             print(f"\n❤️ SINAIS VITAIS:")
             if heart_rate is not None and breath_rate is not None:
-                print(f"   Batimentos: {converted_data['heart_rate']:.1f} bpm")
-                print(f"   Respiração: {converted_data['breath_rate']:.1f} rpm")
+                print(f"   Batimentos: {heart_rate:.1f} bpm")
+                print(f"   Respiração: {breath_rate:.1f} rpm")
             else:
-                print("   Dados vitais indisponíveis")
+                print("   ⚠️ Aguardando detecção de sinais vitais...")
             
             print(f"\n🎯 ANÁLISE:")
             print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
-            print(f"   Score: {satisfaction_data[0]:.1f}")
-            print(f"   Classificação: {satisfaction_data[1]}")
+            print(f"   Score: {converted_data['satisfaction_score']:.1f}")
+            print(f"   Classificação: {converted_data['satisfaction_class']}")
             print("="*50)
             
             # Inserir dados no banco
