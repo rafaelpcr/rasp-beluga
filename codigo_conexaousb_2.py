@@ -434,16 +434,6 @@ class DatabaseManager:
     def insert_radar_data(self, data, attempt=0, max_retries=3, retry_delay=1):
         """Insere dados do radar no banco de dados"""
         try:
-            # Query de inserção
-            query = """
-                INSERT INTO radar_dados
-                (x_point, y_point, move_speed, heart_rate, breath_rate, 
-                satisfaction_score, satisfaction_class, is_engaged, engagement_duration,
-                session_id, section_id, product_id, timestamp, serial_number,
-                distance, dop_index)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            
             # Calcular duração do engajamento (em segundos)
             if not hasattr(self, 'last_engagement_time'):
                 self.last_engagement_time = None
@@ -458,40 +448,40 @@ class DatabaseManager:
                 engagement_duration = 0
                 self.last_engagement_time = None
             
-            # Preparar parâmetros garantindo que valores None não sejam convertidos para float
-            params = [
-                float(data.get('x_point', 0)),
-                float(data.get('y_point', 0)),
-                float(data.get('move_speed', 0)),
-                data.get('heart_rate'),  # Manter como None se não houver valor
-                data.get('breath_rate'),  # Manter como None se não houver valor
-                float(data.get('satisfaction_score', 50.0)),
+            # Query de inserção
+            query = """
+                INSERT INTO radar_dados
+                (x_point, y_point, move_speed, heart_rate, breath_rate, 
+                satisfaction_score, satisfaction_class, is_engaged, engagement_duration,
+                session_id, section_id, product_id, timestamp, serial_number,
+                distance, dop_index)
+                VALUES ({}, {}, {}, {}, {}, {}, '{}', {}, {}, '{}', {}, '{}', '{}', '{}', {}, {})
+            """.format(
+                data.get('x_point', 0),
+                data.get('y_point', 0),
+                data.get('move_speed', 0),
+                data.get('heart_rate', 'NULL') if data.get('heart_rate') is not None else 'NULL',
+                data.get('breath_rate', 'NULL') if data.get('breath_rate') is not None else 'NULL',
+                data.get('satisfaction_score', 50.0),
                 data.get('satisfaction_class', 'NEUTRA'),
-                bool(data.get('is_engaged', False)),
+                1 if data.get('is_engaged', False) else 0,
                 engagement_duration,
                 data.get('session_id', str(uuid.uuid4())),
-                data.get('section_id'),
+                data.get('section_id', 'NULL'),
                 data.get('product_id', 'UNKNOWN'),
                 data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
                 data.get('serial_number', 'RADAR_1'),
-                float(data.get('distance', 0)),
-                int(data.get('dop_index', 0))
-            ]
+                data.get('distance', 0),
+                data.get('dop_index', 0)
+            )
             
             # Log detalhado para debug
             logger.debug("Executando query de inserção:")
-            logger.debug(f"Query: {query}")
-            logger.debug("Parâmetros:")
-            param_names = ['x_point', 'y_point', 'move_speed', 'heart_rate', 'breath_rate',
-                         'satisfaction_score', 'satisfaction_class', 'is_engaged', 'engagement_duration',
-                         'session_id', 'section_id', 'product_id', 'timestamp', 'serial_number',
-                         'distance', 'dop_index']
-            for name, value in zip(param_names, params):
-                logger.debug(f"   {name}: {value} (tipo: {type(value)})")
+            logger.debug(f"Query formatada: {query}")
             
             # Executar inserção com retry em caso de deadlock
             try:
-                self.cursor.execute(query, params)
+                self.cursor.execute(query)
                 self.conn.commit()
                 logger.debug("✅ Query executada com sucesso!")
                 return True
@@ -929,32 +919,37 @@ class SerialRadarManager:
             print("📡 DADOS DO RADAR DETECTADOS")
             print("="*50)
             print(f"⏰ Timestamp: {converted_data['timestamp']}")
+            print("")
             
             if section:
-                print(f"\n📍 LOCALIZAÇÃO:")
+                print(f"📍 LOCALIZAÇÃO:")
                 print(f"   Seção: {section['section_name']}")
                 print(f"   Produto: {section['product_id']}")
             else:
-                print("\n❌ Nenhuma seção detectada para esta posição")
+                print(f"📍 LOCALIZAÇÃO:")
+                print("   ⚠️ Fora das seções monitoradas")
+                print("   Produto: N/A")
             
-            print(f"\n📊 DADOS DE POSIÇÃO:")
-            print(f"   X: {converted_data['x_point']:.2f}cm")
-            print(f"   Y: {converted_data['y_point']:.2f}cm")
-            print(f"   Distância: {converted_data['distance']:.2f}cm")
+            print("")
+            print(f"📊 DADOS DE POSIÇÃO:")
+            print(f"   Distância: {converted_data['distance']:.2f} cm")
             print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
             
-            print(f"\n❤️ SINAIS VITAIS:")
+            print("")
+            print(f"❤️ SINAIS VITAIS:")
             if heart_rate is not None and breath_rate is not None:
                 print(f"   Batimentos: {heart_rate:.1f} bpm")
                 print(f"   Respiração: {breath_rate:.1f} rpm")
             else:
                 print("   ⚠️ Aguardando detecção de sinais vitais...")
             
-            print(f"\n🎯 ANÁLISE:")
+            print("")
+            print(f"🎯 ANÁLISE:")
             print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
             print(f"   Score: {converted_data['satisfaction_score']:.1f}")
             print(f"   Classificação: {converted_data['satisfaction_class']}")
             print("="*50)
+            print("")  # Linha extra para melhor separação entre leituras
             
             # Inserir dados no banco
             if self.db_manager:
