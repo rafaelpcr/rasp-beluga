@@ -325,7 +325,9 @@ db_config = {
     "database": os.getenv("DB_NAME", "Beluga_Analytics"),
     "port": int(os.getenv("DB_PORT", 3306)),
     "use_pure": True,
-    "ssl_disabled": True
+    "ssl_disabled": True,
+    "auth_plugin": 'mysql_native_password',  # Forçar uso de autenticação nativa
+    "allow_insecure_auth": True  # Permitir autenticação sem SSL
 }
 
 class DatabaseManager:
@@ -350,7 +352,19 @@ class DatabaseManager:
                     except:
                         pass
                 
-                self.conn = mysql.connector.connect(**db_config)
+                # Tentar primeiro com configuração padrão
+                try:
+                    self.conn = mysql.connector.connect(**db_config)
+                except mysql.connector.Error as e:
+                    if "SSL" in str(e):
+                        # Se falhar com SSL, tentar configuração alternativa
+                        alt_config = db_config.copy()
+                        alt_config.update({
+                            "ssl_disabled": True,
+                            "auth_plugin": "mysql_native_password"
+                        })
+                        self.conn = mysql.connector.connect(**alt_config)
+                
                 self.cursor = self.conn.cursor(dictionary=True, buffered=True)
                 
                 # Testar conexão
