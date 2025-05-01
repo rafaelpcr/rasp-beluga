@@ -457,22 +457,22 @@ class DatabaseManager:
                 distance, dop_index)
                 VALUES ({}, {}, {}, {}, {}, {}, '{}', {}, {}, '{}', {}, '{}', '{}', '{}', {}, {})
             """.format(
-                data.get('x_point', 0),
-                data.get('y_point', 0),
-                data.get('move_speed', 0),
-                data.get('heart_rate', 'NULL') if data.get('heart_rate') is not None else 'NULL',
-                data.get('breath_rate', 'NULL') if data.get('breath_rate') is not None else 'NULL',
-                data.get('satisfaction_score', 50.0),
+                float(data.get('x_point', 0)),
+                float(data.get('y_point', 0)),
+                float(data.get('move_speed', 0)),
+                'NULL' if data.get('heart_rate') is None else float(data.get('heart_rate')),
+                'NULL' if data.get('breath_rate') is None else float(data.get('breath_rate')),
+                float(data.get('satisfaction_score', 50.0)),
                 data.get('satisfaction_class', 'NEUTRA'),
                 1 if data.get('is_engaged', False) else 0,
                 engagement_duration,
                 data.get('session_id', str(uuid.uuid4())),
-                data.get('section_id', 'NULL'),
+                'NULL' if data.get('section_id') is None else int(data.get('section_id')),
                 data.get('product_id', 'UNKNOWN'),
                 data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
                 data.get('serial_number', 'RADAR_1'),
-                data.get('distance', 0),
-                data.get('dop_index', 0)
+                float(data.get('distance', 0)),
+                int(data.get('dop_index', 0))
             )
             
             # Log detalhado para debug
