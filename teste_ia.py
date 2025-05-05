@@ -12,7 +12,8 @@ import serial
 import threading
 import re
 import math
-from config import DB_CONFIG, SERIAL_CONFIG
+from ml_analytics import MLManager
+from config import DB_CONFIG, SERIAL_CONFIG, ML_CONFIG
 
 # Configuração básica de logging
 logging.basicConfig(
@@ -781,7 +782,8 @@ class SerialRadarManager:
         self.db_manager = None
         self.analytics_manager = AnalyticsManager()
         self.vital_signs_manager = VitalSignsManager()
-
+        self.ml_manager = MLManager()
+        
     def find_serial_port(self):
         """Tenta encontrar a porta serial do dispositivo automaticamente"""
         import serial.tools.list_ports
@@ -984,6 +986,37 @@ class SerialRadarManager:
                 converted_data['section_id'] = None
                 converted_data['product_id'] = None
             
+            # Usar ML para prever engajamento
+            is_engaged, engagement_prob = self.ml_manager.predict_engagement(converted_data)
+            converted_data['is_engaged'] = is_engaged
+            converted_data['engagement_probability'] = engagement_prob
+            
+            # Usar ML para prever satisfação
+            satisfaction_score = self.ml_manager.predict_satisfaction(converted_data)
+            if satisfaction_score is not None:
+                converted_data['satisfaction_score'] = satisfaction_score
+                # Classificar satisfação baseado no score
+                if satisfaction_score >= 85:
+                    converted_data['satisfaction_class'] = "MUITO_POSITIVA"
+                elif satisfaction_score >= 70:
+                    converted_data['satisfaction_class'] = "POSITIVA"
+                elif satisfaction_score >= 50:
+                    converted_data['satisfaction_class'] = "NEUTRA"
+                elif satisfaction_score >= 30:
+                    converted_data['satisfaction_class'] = "NEGATIVA"
+                else:
+                    converted_data['satisfaction_class'] = "MUITO_NEGATIVA"
+            
+            # Usar ML para prever intenção de compra
+            purchase_prob = self.ml_manager.predict_purchase_intent(converted_data)
+            if purchase_prob is not None:
+                converted_data['purchase_probability'] = purchase_prob
+            
+            # Usar ML para segmentação de clientes
+            cluster = self.ml_manager.predict_cluster(converted_data)
+            if cluster is not None:
+                converted_data['customer_cluster'] = cluster
+            
             # Exibir dados formatados no terminal
             print("\n" + "="*50)
             print("📡 DADOS DO RADAR DETECTADOS")
@@ -1013,6 +1046,15 @@ class SerialRadarManager:
             else:
                 print("   ⚠️ Aguardando detecção de sinais vitais...")
             
+            print("")
+            print(f"🎯 ANÁLISE:")
+            print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'} (Prob: {engagement_prob:.2%})")
+            print(f"   Score: {converted_data['satisfaction_score']:.1f}")
+            print(f"   Classificação: {converted_data['satisfaction_class']}")
+            if 'purchase_probability' in converted_data:
+                print(f"   Prob. Compra: {converted_data['purchase_probability']:.2%}")
+            if 'customer_cluster' in converted_data:
+                print(f"   Segmento: {converted_data['customer_cluster']}")
             print("="*50)
             print("")  # Linha extra para melhor separação entre leituras
             
