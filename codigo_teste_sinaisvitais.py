@@ -587,23 +587,28 @@ class VitalSignsManager:
         self.breath_phase_buffer = []
         self.quality_buffer = []  # Buffer para qualidade do sinal
         
-        # Configurações de buffer
-        self.HEART_BUFFER_SIZE = 30   # 3 segundos para batimentos
+        # Configurações de buffer - Aumentado para melhor detecção
+        self.HEART_BUFFER_SIZE = 50   # 5 segundos para batimentos
         self.BREATH_BUFFER_SIZE = 80  # 8 segundos para respiração
-        self.QUALITY_BUFFER_SIZE = 10 # 1 segundo para qualidade
+        self.QUALITY_BUFFER_SIZE = 20 # 2 segundos para qualidade
         
         # Últimas leituras válidas
         self.last_heart_rate = None
         self.last_breath_rate = None
         self.last_quality_score = 0
         
-        # Thresholds e parâmetros
-        self.MIN_QUALITY_SCORE = 0.6  # Mínimo de 60% de qualidade
-        self.STABILITY_THRESHOLD = 0.2  # Máxima variação permitida
+        # Thresholds e parâmetros ajustados
+        self.MIN_QUALITY_SCORE = 0.4  # Reduzido para 40% de qualidade mínima
+        self.STABILITY_THRESHOLD = 0.3  # Aumentado para 30% de variação permitida
         self.VALID_RANGES = {
-            'heart_rate': (45, 120),  # bpm mais realista
-            'breath_rate': (8, 25)    # rpm mais realista
+            'heart_rate': (40, 140),  # Range mais amplo para batimentos
+            'breath_rate': (8, 25)    # Range mantido para respiração
         }
+        
+        # Histórico para detecção de tendências
+        self.heart_rate_history = []
+        self.breath_rate_history = []
+        self.HISTORY_SIZE = 10  # Manter histórico das últimas 10 leituras válidas
         
     def calculate_signal_quality(self, phase_data, distance):
         """
@@ -673,7 +678,7 @@ class VitalSignsManager:
                 self.breath_phase_buffer.pop(0)
             
             # Verificar se temos dados suficientes
-            if len(self.heart_phase_buffer) < self.HEART_BUFFER_SIZE * 0.8:
+            if len(self.heart_phase_buffer) < self.HEART_BUFFER_SIZE * 0.7:  # Reduzido para 70%
                 logger.debug(f"⏳ Aguardando mais dados ({len(self.heart_phase_buffer)}/{self.HEART_BUFFER_SIZE})")
                 return None, None
             
@@ -706,11 +711,17 @@ class VitalSignsManager:
                     rate_change = abs(heart_rate - self.last_heart_rate) / self.last_heart_rate
                     if rate_change > self.STABILITY_THRESHOLD:
                         logger.debug(f"⚠️ Mudança brusca nos batimentos: {rate_change:.2f}")
-                        heart_rate = None
+                        # Em vez de descartar, usar média com último valor
+                        heart_rate = (heart_rate + self.last_heart_rate) / 2
                     else:
                         self.last_heart_rate = heart_rate
                 else:
                     self.last_heart_rate = heart_rate
+                
+                # Atualizar histórico
+                self.heart_rate_history.append(heart_rate)
+                if len(self.heart_rate_history) > self.HISTORY_SIZE:
+                    self.heart_rate_history.pop(0)
             
             if breath_rate:
                 # Verificar estabilidade em relação à última leitura
@@ -723,6 +734,11 @@ class VitalSignsManager:
                         self.last_breath_rate = breath_rate
                 else:
                     self.last_breath_rate = breath_rate
+                
+                # Atualizar histórico
+                self.breath_rate_history.append(breath_rate)
+                if len(self.breath_rate_history) > self.HISTORY_SIZE:
+                    self.breath_rate_history.pop(0)
             
             # Log detalhado
             if heart_rate and breath_rate:
@@ -765,6 +781,12 @@ class VitalSignsManager:
             peak_idx = np.argmax(magnitude_spectrum)
             dominant_freq = fft_freq[valid_idx[peak_idx]]
             
+            # Verificar se o pico é significativo
+            peak_magnitude = magnitude_spectrum[peak_idx]
+            avg_magnitude = np.mean(magnitude_spectrum)
+            if peak_magnitude < 1.5 * avg_magnitude:  # Pico deve ser 50% maior que a média
+                return None
+            
             # Converter para BPM/RPM
             rate = abs(dominant_freq * rate_multiplier)
             
@@ -784,7 +806,7 @@ class SerialRadarManager:
         self.db_manager = None
         self.analytics_manager = AnalyticsManager()
         self.vital_signs_manager = VitalSignsManager()
-
+        
     def find_serial_port(self):
         """Tenta encontrar a porta serial do dispositivo automaticamente"""
         import serial.tools.list_ports
@@ -939,7 +961,6 @@ class SerialRadarManager:
             data = parse_serial_data(raw_data)
             if not data:
                 return
-                
             # Calcular sinais vitais usando os dados de fase
             heart_rate, breath_rate = self.vital_signs_manager.calculate_vital_signs(
                 data.get('total_phase', 0),
@@ -947,7 +968,6 @@ class SerialRadarManager:
                 data.get('heart_phase', 0),
                 data.get('distance', 0)
             )
-            
             # Calcular distância se não foi fornecida
             distance = data.get('distance', 0)
             if distance == 0:
@@ -955,12 +975,10 @@ class SerialRadarManager:
                 y = data.get('y_point', 0)
                 distance = (x**2 + y**2)**0.5
                 logger.debug(f"Distância calculada: {distance:.2f}cm")
-            
             # Calcular velocidade de movimento usando dop_index
             dop_index = data.get('dop_index', 0)
             move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else 0
             logger.debug(f"Velocidade calculada: {move_speed:.2f}cm/s (dop_index: {dop_index})")
-            
             # Criar dicionário com dados convertidos
             converted_data = {
                 'x_point': data.get('x_point', 0),
@@ -972,28 +990,44 @@ class SerialRadarManager:
                 'breath_rate': breath_rate,
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
-            
             # Identificar seção baseado na posição
             section = shelf_manager.get_section_at_position(
                 converted_data['x_point'],
                 converted_data['y_point'],
                 self.db_manager
             )
-            
             if section:
                 converted_data['section_id'] = section['section_id']
                 converted_data['product_id'] = section['product_id']
             else:
                 converted_data['section_id'] = None
                 converted_data['product_id'] = None
-            
+            # Substituir ML por lógica simples ou valores padrão
+            is_engaged = False
+            engagement_prob = 0.0
+            converted_data['is_engaged'] = is_engaged
+            converted_data['engagement_probability'] = engagement_prob
+            satisfaction_score = 50.0
+            converted_data['satisfaction_score'] = satisfaction_score
+            # Classificar satisfação baseado no score
+            if satisfaction_score >= 85:
+                converted_data['satisfaction_class'] = "MUITO_POSITIVA"
+            elif satisfaction_score >= 70:
+                converted_data['satisfaction_class'] = "POSITIVA"
+            elif satisfaction_score >= 50:
+                converted_data['satisfaction_class'] = "NEUTRA"
+            elif satisfaction_score >= 30:
+                converted_data['satisfaction_class'] = "NEGATIVA"
+            else:
+                converted_data['satisfaction_class'] = "MUITO_NEGATIVA"
+            converted_data['purchase_probability'] = 0.0
+            converted_data['customer_cluster'] = "default"
             # Exibir dados formatados no terminal
             print("\n" + "="*50)
             print("📡 DADOS DO RADAR DETECTADOS")
             print("="*50)
             print(f"⏰ Timestamp: {converted_data['timestamp']}")
             print("")
-            
             if section:
                 print(f"📍 LOCALIZAÇÃO:")
                 print(f"   Seção: {section['section_name']}")
@@ -1002,12 +1036,10 @@ class SerialRadarManager:
                 print(f"📍 LOCALIZAÇÃO:")
                 print("   ⚠️ Fora das seções monitoradas")
                 print("   Produto: N/A")
-            
             print("")
             print(f"📊 DADOS DE POSIÇÃO:")
             print(f"   Distância: {converted_data['distance']:.2f} cm")
             print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
-            
             print("")
             print(f"❤️ SINAIS VITAIS:")
             if heart_rate is not None and breath_rate is not None:
@@ -1015,10 +1047,15 @@ class SerialRadarManager:
                 print(f"   Respiração: {breath_rate:.1f} rpm")
             else:
                 print("   ⚠️ Aguardando detecção de sinais vitais...")
-            
+            print("")
+            print(f"🎯 ANÁLISE:")
+            print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'} (Prob: {engagement_prob:.2%})")
+            print(f"   Score: {converted_data['satisfaction_score']:.1f}")
+            print(f"   Classificação: {converted_data['satisfaction_class']}")
+            print(f"   Prob. Compra: {converted_data['purchase_probability']:.2%}")
+            print(f"   Segmento: {converted_data['customer_cluster']}")
             print("="*50)
             print("")  # Linha extra para melhor separação entre leituras
-            
             # Inserir dados no banco
             if self.db_manager:
                 try:
@@ -1032,7 +1069,6 @@ class SerialRadarManager:
                     logger.error(traceback.format_exc())
             else:
                 logger.warning("⚠️ Gerenciador de banco de dados não disponível")
-            
         except Exception as e:
             logger.error(f"❌ Erro ao processar dados: {str(e)}")
             logger.error(traceback.format_exc())
