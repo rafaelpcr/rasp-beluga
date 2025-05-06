@@ -578,50 +578,50 @@ class SerialRadarManager:
             else:
                 converted_data['satisfaction_class'] = "MUITO_NEGATIVA"
             print("\n" + "="*50)
-            print(\"📡 DADOS DO RADAR DETECTADOS\")
-            print(\"=\"*50)
-            print(f\"⏰ Timestamp: {converted_data['timestamp']}\")
-            print(\"\")
+            print("📡 DADOS DO RADAR DETECTADOS")
+            print("="*50)
+            print(f"⏰ Timestamp: {converted_data['timestamp']}")
+            print("")
             if section:
-                print(f\"📍 LOCALIZAÇÃO:\")
-                print(f\"   Seção: {section['section_name']}\")
-                print(f\"   Produto: {section['product_id']}\")
+                print(f"📍 LOCALIZAÇÃO:")
+                print(f"   Seção: {section['section_name']}")
+                print(f"   Produto: {section['product_id']}")
             else:
-                print(f\"📍 LOCALIZAÇÃO:\")
-                print(\"   ⚠️ Fora das seções monitoradas\")
-                print(\"   Produto: N/A\")
-            print(\"\")
-            print(f\"📊 DADOS DE POSIÇÃO:\")
-            print(f\"   Distância: {converted_data['distance']:.2f} cm\")
-            print(f\"   Velocidade: {converted_data['move_speed']:.2f} cm/s\")
-            print(\"\")
-            print(f\"❤️ SINAIS VITAIS:\")
+                print(f"📍 LOCALIZAÇÃO:")
+                print("   ⚠️ Fora das seções monitoradas")
+                print("   Produto: N/A")
+            print("")
+            print(f"📊 DADOS DE POSIÇÃO:")
+            print(f"   Distância: {converted_data['distance']:.2f} cm")
+            print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
+            print("")
+            print(f"❤️ SINAIS VITAIS:")
             if heart_rate is not None and breath_rate is not None:
-                print(f\"   Batimentos: {heart_rate:.1f} bpm\")
-                print(f\"   Respiração: {breath_rate:.1f} rpm\")
+                print(f"   Batimentos: {heart_rate:.1f} bpm")
+                print(f"   Respiração: {breath_rate:.1f} rpm")
             else:
-                print(\"   ⚠️ Aguardando detecção de sinais vitais...\")
-            print(\"\")
-            print(f\"🎯 ANÁLISE:\")
-            print(f\"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}\")
-            print(f\"   Score: {converted_data['satisfaction_score']:.1f}\")
-            print(f\"   Classificação: {converted_data['satisfaction_class']}\")
-            print(\"=\"*50)
-            print(\"\")
+                print("   ⚠️ Aguardando detecção de sinais vitais...")
+            print("")
+            print(f"🎯 ANÁLISE:")
+            print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
+            print(f"   Score: {converted_data['satisfaction_score']:.1f}")
+            print(f"   Classificação: {converted_data['satisfaction_class']}")
+            print("="*50)
+            print("")
             if self.db_manager:
                 try:
                     success = self.db_manager.insert_radar_data(converted_data)
                     if success:
-                        logger.debug(\"✅ Dados enviados para o Google Sheets!\")
+                        logger.debug("✅ Dados enviados para o Google Sheets!")
                     else:
-                        logger.error(\"❌ Falha ao enviar dados para o Google Sheets\")
+                        logger.error("❌ Falha ao enviar dados para o Google Sheets")
                 except Exception as e:
-                    logger.error(f\"❌ Erro ao enviar para o Google Sheets: {str(e)}\")
+                    logger.error(f"❌ Erro ao enviar para o Google Sheets: {str(e)}")
                     logger.error(traceback.format_exc())
             else:
-                logger.warning(\"⚠️ Gerenciador de planilha não disponível\")
+                logger.warning("⚠️ Gerenciador de planilha não disponível")
         except Exception as e:
-            logger.error(f\"❌ Erro ao processar dados: {str(e)}\")
+            logger.error(f"❌ Erro ao processar dados: {str(e)}")
             logger.error(traceback.format_exc())
 
 def main():
