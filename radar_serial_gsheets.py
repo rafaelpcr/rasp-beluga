@@ -34,7 +34,11 @@ RANGE_STEP = 2.5
 
 class GoogleSheetsManager:
     def __init__(self, creds_path, spreadsheet_name, worksheet_name='Sheet1'):
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+        SCOPES = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive',
+            'https://www.googleapis.com/auth/drive.file'
+        ]
         self.creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
         self.gc = gspread.authorize(self.creds)
         self.spreadsheet = self.gc.open(spreadsheet_name)
