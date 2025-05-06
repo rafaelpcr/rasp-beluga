@@ -580,17 +580,17 @@ class AnalyticsManager:
 class VitalSignsManager:
     def __init__(self):
         # Configurações de buffer e amostragem
-        self.SAMPLE_RATE = 10  # 10Hz (100ms entre amostras)
+        self.SAMPLE_RATE = 20  # Aumentado para 20Hz (50ms entre amostras)
         
         # Buffers para diferentes sinais
         self.heart_phase_buffer = []
         self.breath_phase_buffer = []
         self.quality_buffer = []  # Buffer para qualidade do sinal
         
-        # Configurações de buffer - Aumentado para melhor detecção
-        self.HEART_BUFFER_SIZE = 50   # 5 segundos para batimentos
-        self.BREATH_BUFFER_SIZE = 80  # 8 segundos para respiração
-        self.QUALITY_BUFFER_SIZE = 20 # 2 segundos para qualidade
+        # Configurações de buffer - Reduzido para melhor resposta
+        self.HEART_BUFFER_SIZE = 20   # 1 segundo para batimentos
+        self.BREATH_BUFFER_SIZE = 30  # 1.5 segundos para respiração
+        self.QUALITY_BUFFER_SIZE = 10 # 0.5 segundos para qualidade
         
         # Últimas leituras válidas
         self.last_heart_rate = None
@@ -598,8 +598,8 @@ class VitalSignsManager:
         self.last_quality_score = 0
         
         # Thresholds e parâmetros ajustados
-        self.MIN_QUALITY_SCORE = 0.4  # Reduzido para 40% de qualidade mínima
-        self.STABILITY_THRESHOLD = 0.3  # Aumentado para 30% de variação permitida
+        self.MIN_QUALITY_SCORE = 0.3  # Reduzido para 30% de qualidade mínima
+        self.STABILITY_THRESHOLD = 0.4  # Aumentado para 40% de variação permitida
         self.VALID_RANGES = {
             'heart_rate': (40, 140),  # Range mais amplo para batimentos
             'breath_rate': (8, 25)    # Range mantido para respiração
