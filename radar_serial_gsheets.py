@@ -15,8 +15,8 @@ from dotenv import load_dotenv
 
 # Configuração básica de logging
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,  # Mudando para INFO para reduzir mensagens de debug
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('radar_serial.log'),
         logging.StreamHandler()
@@ -24,10 +24,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger('radar_serial_app')
 
+# Configurando o nível de log para outros módulos
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('gspread').setLevel(logging.WARNING)
+
 load_dotenv()
 
 SERIAL_CONFIG = {
-    'port': os.getenv('SERIAL_PORT', '/dev/ttyUSB0'),
+    'port': os.getenv('SERIAL_PORT', '/dev/tty.usbmodem1101'),
     'baudrate': int(os.getenv('SERIAL_BAUDRATE', 115200))
 }
 RANGE_STEP = 2.5
@@ -47,6 +51,7 @@ class GoogleSheetsManager:
     def insert_radar_data(self, data):
         try:
             row = [
+                data.get('session_id'),
                 data.get('timestamp'),
                 data.get('x_point'),
                 data.get('y_point'),
@@ -69,42 +74,42 @@ class GoogleSheetsManager:
             return False
 
 def parse_serial_data(raw_data):
-    # ... (mesma função do radar_serial.py)
-    # (copiar função completa aqui)
     try:
-        x_pattern = r'x_point:\s*([-]?\d+\.\d+)'
-        y_pattern = r'y_point:\s*([-]?\d+\.\d+)'
-        dop_pattern = r'dop_index:\s*([-]?\d+)'
-        cluster_pattern = r'cluster_index:\s*(\d+)'
-        speed_pattern = r'move_speed:\s*([-]?\d+\.\d+)\s*cm/s'
-        total_phase_pattern = r'total_phase:\s*([-]?\d+\.\d+)'
-        breath_phase_pattern = r'breath_phase:\s*([-]?\d+\.\d+)'
-        heart_phase_pattern = r'heart_phase:\s*([-]?\d+\.\d+)'
-        breath_rate_pattern = r'breath_rate:\s*([-]?\d+\.\d+)'
-        heart_rate_pattern = r'heart_rate:\s*([-]?\d+\.\d+)'
-        distance_pattern = r'distance:\s*([-]?\d+\.\d+)'
+        # Regex ainda mais tolerante: aceita espaços extras, quebras de linha e maiúsculas/minúsculas
+        x_pattern = r'x_point\s*:\s*([-+]?\d*\.?\d+)'  # aceita inteiro ou float, sinal opcional
+        y_pattern = r'y_point\s*:\s*([-+]?\d*\.?\d+)'
+        dop_pattern = r'dop_index\s*:\s*([-+]?\d+)'  # aceita sinal opcional
+        cluster_pattern = r'cluster_index\s*:\s*(\d+)'
+        speed_pattern = r'move_speed\s*:\s*([-+]?\d*\.?\d+)\s*cm/s'
+        total_phase_pattern = r'total_phase\s*:\s*([-+]?\d*\.?\d+)'
+        breath_phase_pattern = r'breath_phase\s*:\s*([-+]?\d*\.?\d+)'
+        heart_phase_pattern = r'heart_phase\s*:\s*([-+]?\d*\.?\d+)'
+        breath_rate_pattern = r'breath_rate\s*:\s*([-+]?\d*\.?\d+)'
+        heart_rate_pattern = r'heart_rate\s*:\s*([-+]?\d*\.?\d+)'
+        distance_pattern = r'distance\s*:\s*([-+]?\d*\.?\d+)'
+        # Usar flags re.IGNORECASE para aceitar maiúsculas/minúsculas
         if '-----Human Detected-----' not in raw_data:
             return None
         if 'Target 1:' not in raw_data:
             return None
-        x_match = re.search(x_pattern, raw_data)
-        y_match = re.search(y_pattern, raw_data)
-        dop_match = re.search(dop_pattern, raw_data)
-        cluster_match = re.search(cluster_pattern, raw_data)
-        speed_match = re.search(speed_pattern, raw_data)
-        total_phase_match = re.search(total_phase_pattern, raw_data)
-        breath_phase_match = re.search(breath_phase_pattern, raw_data)
-        heart_phase_match = re.search(heart_phase_pattern, raw_data)
-        breath_rate_match = re.search(breath_rate_pattern, raw_data)
-        heart_rate_match = re.search(heart_rate_pattern, raw_data)
-        distance_match = re.search(distance_pattern, raw_data)
+        x_match = re.search(x_pattern, raw_data, re.IGNORECASE)
+        y_match = re.search(y_pattern, raw_data, re.IGNORECASE)
+        dop_match = re.search(dop_pattern, raw_data, re.IGNORECASE)
+        cluster_match = re.search(cluster_pattern, raw_data, re.IGNORECASE)
+        speed_match = re.search(speed_pattern, raw_data, re.IGNORECASE)
+        total_phase_match = re.search(total_phase_pattern, raw_data, re.IGNORECASE)
+        breath_phase_match = re.search(breath_phase_pattern, raw_data, re.IGNORECASE)
+        heart_phase_match = re.search(heart_phase_pattern, raw_data, re.IGNORECASE)
+        breath_rate_match = re.search(breath_rate_pattern, raw_data, re.IGNORECASE)
+        heart_rate_match = re.search(heart_rate_pattern, raw_data, re.IGNORECASE)
+        distance_match = re.search(distance_pattern, raw_data, re.IGNORECASE)
         if x_match and y_match:
             data = {
                 'x_point': float(x_match.group(1)),
                 'y_point': float(y_match.group(1)),
                 'dop_index': int(dop_match.group(1)) if dop_match else 0,
                 'cluster_index': int(cluster_match.group(1)) if cluster_match else 0,
-                'move_speed': float(speed_match.group(1)) if speed_match else 0.0,
+                'move_speed': float(speed_match.group(1))/100 if speed_match else 0.0,
                 'total_phase': float(total_phase_match.group(1)) if total_phase_match else 0.0,
                 'breath_phase': float(breath_phase_match.group(1)) if breath_phase_match else 0.0,
                 'heart_phase': float(heart_phase_match.group(1)) if heart_phase_match else 0.0,
@@ -113,7 +118,7 @@ def parse_serial_data(raw_data):
                 'distance': float(distance_match.group(1)) if distance_match else None
             }
             if data['distance'] is None:
-                data['distance'] = math.sqrt(data['x_point']**2 + data['y_point']**2) * 100
+                data['distance'] = math.sqrt(data['x_point']**2 + data['y_point']**2)
             if data['heart_rate'] is None:
                 data['heart_rate'] = 75.0
             if data['breath_rate'] is None:
@@ -159,55 +164,52 @@ def convert_radar_data(raw_data):
 
 class ShelfManager:
     def __init__(self):
-        # Constantes para mapeamento de seções
-        self.SECTION_WIDTH = 50  # Largura de cada seção em centímetros
-        self.SECTION_HEIGHT = 30  # Altura de cada seção em centímetros
-        self.MAX_SECTIONS_X = 4    # Número máximo de seções na horizontal
-        self.MAX_SECTIONS_Y = 3    # Número máximo de seções na vertical
-        self.SCALE_FACTOR = 100    # Fator de escala para ajustar coordenadas do radar
-        # Seções padrão (em memória)
+        self.SECTION_WIDTH = 0.5  # metros
+        self.SECTION_HEIGHT = 0.3  # metros
+        self.MAX_SECTIONS_X = 3
+        self.MAX_SECTIONS_Y = 1
+        self.SCALE_FACTOR = 1  # Não precisa mais de escala
         self.sections = [
             {
                 'section_id': 1,
                 'section_name': 'Granolas Premium',
                 'product_id': '1',
-                'x_start': 0.0,
+                'x_start': -1.0,
                 'y_start': 0.0,
-                'x_end': 0.5,
-                'y_end': 0.3
+                'x_end': -0.15,
+                'y_end': 1.5
             },
             {
                 'section_id': 2,
                 'section_name': 'Mix de Frutas Secas',
                 'product_id': '2',
-                'x_start': 0.5,
+                'x_start': -0.15,
                 'y_start': 0.0,
-                'x_end': 1.0,
-                'y_end': 0.3
+                'x_end': 0.15,
+                'y_end': 1.5
             },
             {
                 'section_id': 3,
                 'section_name': 'Barras de Cereais',
                 'product_id': '3',
-                'x_start': 1.0,
+                'x_start': 0.15,
                 'y_start': 0.0,
-                'x_end': 1.5,
-                'y_end': 0.3
+                'x_end': 1.0,
+                'y_end': 1.5
             }
         ]
 
-    def adjust_scale(self, value):
-        """Ajusta a escala das coordenadas do radar"""
-        return value * self.SCALE_FACTOR
-
     def get_section_at_position(self, x, y, db_manager=None):
-        """Identifica a seção baseada nas coordenadas (x, y)"""
-        x_adjusted = self.adjust_scale(x) / 100  # Volta para metros
-        y_adjusted = self.adjust_scale(y) / 100
+        logger.debug(f"Coordenadas recebidas - X: {x:.2f}m, Y: {y:.2f}m")
+        if x < -1.0 or x > 1.0 or y < 0 or y > 1.5:
+            logger.debug(f"⚠️ Coordenadas fora dos limites máximos")
+            return None
         for section in self.sections:
-            if (section['x_start'] <= x_adjusted <= section['x_end'] and
-                section['y_start'] <= y_adjusted <= section['y_end']):
+            logger.debug(f"Verificando seção {section['section_name']} - X: {section['x_start']:.2f} a {section['x_end']:.2f}m")
+            if (section['x_start'] <= x <= section['x_end'] and section['y_start'] <= y <= section['y_end']):
+                logger.debug(f"✅ Seção encontrada: {section['section_name']}")
                 return section
+        logger.debug("❌ Nenhuma seção encontrada para as coordenadas fornecidas")
         return None
 
 shelf_manager = ShelfManager()
@@ -289,33 +291,52 @@ class VitalSignsManager:
 
     def calculate_signal_quality(self, phase_data, distance):
         try:
-            if not phase_data or len(phase_data) < 5:
+            if not phase_data or len(phase_data) < 1:
                 return 0.0
+                
+            # Se for um único valor, criar uma lista com ele
+            if isinstance(phase_data, (int, float)):
+                phase_data = [phase_data]
+                
             distance_score = 1.0
             if distance < 30 or distance > 150:
                 distance_score = 0.0
             elif distance > 100:
                 distance_score = 1.0 - ((distance - 100) / 50)
-            variance = np.var(phase_data)
+                
+            # Para um único valor, usar uma variância mínima
+            variance = 0.1 if len(phase_data) == 1 else np.var(phase_data)
             variance_score = 1.0 / (1.0 + variance * 10)
-            amplitude = np.ptp(phase_data)
+            
+            # Para um único valor, usar uma amplitude mínima
+            amplitude = 0.1 if len(phase_data) == 1 else np.ptp(phase_data)
             amplitude_score = 1.0
             if amplitude < 0.01 or amplitude > 1.0:
                 amplitude_score = 0.5
+                
             quality_score = (distance_score * 0.3 +
                            variance_score * 0.4 +
                            amplitude_score * 0.3)
+                           
             self.quality_buffer.append(quality_score)
             if len(self.quality_buffer) > self.QUALITY_BUFFER_SIZE:
                 self.quality_buffer.pop(0)
+                
             self.last_quality_score = np.mean(self.quality_buffer)
             return self.last_quality_score
+            
         except Exception as e:
             logger.error(f"Erro ao calcular qualidade do sinal: {str(e)}")
             return 0.0
 
     def calculate_vital_signs(self, total_phase, breath_phase, heart_phase, distance):
         try:
+            # Converter os valores de fase para listas se forem floats
+            if isinstance(heart_phase, (int, float)):
+                heart_phase = [heart_phase]
+            if isinstance(breath_phase, (int, float)):
+                breath_phase = [breath_phase]
+                
             quality_score = self.calculate_signal_quality(heart_phase, distance)
             logger.debug(f"Qualidade do sinal: {quality_score:.2f}")
             if quality_score < self.MIN_QUALITY_SCORE:
@@ -416,6 +437,37 @@ class SerialRadarManager:
         self.db_manager = None
         self.analytics_manager = AnalyticsManager()
         self.vital_signs_manager = VitalSignsManager()
+        self.current_session_id = None
+        self.last_activity_time = None
+        self.SESSION_TIMEOUT = 300  # 5 minutos em segundos
+        # Buffer para engajamento
+        self.engagement_buffer = []
+        self.ENGAGEMENT_WINDOW = 1  # Alterado para 1 leitura (5 segundos)
+        self.ENGAGEMENT_DISTANCE = 1.0  # metros
+        self.ENGAGEMENT_SPEED = 10.0  # cm/s
+        self.ENGAGEMENT_MIN_COUNT = 1  # Alterado para 1 leitura (5 segundos)
+
+    def _generate_session_id(self):
+        """Gera um novo ID de sessão"""
+        return str(uuid.uuid4())
+
+    def _check_session_timeout(self):
+        """Verifica se a sessão atual expirou"""
+        if self.last_activity_time and (time.time() - self.last_activity_time) > self.SESSION_TIMEOUT:
+            logger.debug("Sessão expirada, gerando nova sessão")
+            self.current_session_id = self._generate_session_id()
+            self.last_activity_time = time.time()
+            return True
+        return False
+
+    def _update_session(self):
+        """Atualiza ou cria uma nova sessão"""
+        if not self.current_session_id or self._check_session_timeout():
+            self.current_session_id = self._generate_session_id()
+            self.last_activity_time = time.time()
+            logger.debug(f"Nova sessão iniciada: {self.current_session_id}")
+        else:
+            self.last_activity_time = time.time()
 
     def find_serial_port(self):
         import serial.tools.list_ports
@@ -498,20 +550,24 @@ class SerialRadarManager:
                 if data:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
+                    logger.debug(f"Dados recebidos: {text}")  # Log dos dados brutos
                     buffer += text
                     if '\n' in buffer:
                         lines = buffer.split('\n')
                         buffer = lines[-1]
                         for line in lines[:-1]:
                             line = line.strip()
+                            logger.debug(f"Processando linha: {line}")  # Log de cada linha
                             if '-----Human Detected-----' in line:
-                                message_mode = True
-                                message_buffer = line + '\n'
-                                target_data_complete = False
+                                if not message_mode:
+                                    message_mode = True
+                                    message_buffer = line + '\n'
+                                    target_data_complete = False
                             elif message_mode:
                                 message_buffer += line + '\n'
-                                if 'distance:' in line:
+                                if 'move_speed:' in line:
                                     target_data_complete = True
+                                    logger.debug(f"Mensagem completa recebida:\n{message_buffer}")  # Log da mensagem completa
                                     self.process_radar_data(message_buffer)
                                     message_mode = False
                                     message_buffer = ""
@@ -525,108 +581,152 @@ class SerialRadarManager:
                 logger.error(traceback.format_exc())
                 time.sleep(1)
 
+    def _check_engagement(self, section_id, distance, move_speed):
+        # Adiciona leitura ao buffer
+        self.engagement_buffer.append({
+            'section_id': section_id,
+            'distance': distance,
+            'move_speed': move_speed,
+            'timestamp': time.time()
+        })
+        # Mantém o buffer no tamanho da janela
+        if len(self.engagement_buffer) > self.ENGAGEMENT_WINDOW:
+            self.engagement_buffer.pop(0)
+        # Filtra leituras válidas
+        valid = [e for e in self.engagement_buffer if e['section_id'] == section_id and e['distance'] <= self.ENGAGEMENT_DISTANCE and e['move_speed'] <= self.ENGAGEMENT_SPEED]
+        # Engajamento se houver pelo menos ENGAGEMENT_MIN_COUNT leituras consecutivas válidas
+        if len(valid) >= self.ENGAGEMENT_MIN_COUNT:
+            return True
+        return False
+
     def process_radar_data(self, raw_data):
-        try:
-            data = parse_serial_data(raw_data)
-            if not data:
-                return
+        data = parse_serial_data(raw_data)
+        if not data:
+            return
+
+        # Atualiza a sessão
+        self._update_session()
+
+        # Usar os valores de batimentos e respiração diretamente do radar se disponíveis
+        heart_rate = data.get('heart_rate')
+        breath_rate = data.get('breath_rate')
+        
+        # Se não houver valores diretos, calcular usando as fases
+        if heart_rate is None or breath_rate is None:
             heart_rate, breath_rate = self.vital_signs_manager.calculate_vital_signs(
                 data.get('total_phase', 0),
                 data.get('breath_phase', 0),
                 data.get('heart_phase', 0),
                 data.get('distance', 0)
             )
-            distance = data.get('distance', 0)
-            if distance == 0:
-                x = data.get('x_point', 0)
-                y = data.get('y_point', 0)
-                distance = (x**2 + y**2)**0.5
-                logger.debug(f"Distância calculada: {distance:.2f}cm")
-            dop_index = data.get('dop_index', 0)
-            move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else 0
-            logger.debug(f"Velocidade calculada: {move_speed:.2f}cm/s (dop_index: {dop_index})")
-            converted_data = {
-                'x_point': data.get('x_point', 0),
-                'y_point': data.get('y_point', 0),
-                'move_speed': move_speed,
-                'distance': distance,
-                'dop_index': dop_index,
-                'heart_rate': heart_rate,
-                'breath_rate': breath_rate,
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-            section = shelf_manager.get_section_at_position(
-                converted_data['x_point'],
-                converted_data['y_point'],
-                self.db_manager
-            )
-            if section:
-                converted_data['section_id'] = section['section_id']
-                converted_data['product_id'] = section['product_id']
-            else:
-                converted_data['section_id'] = None
-                converted_data['product_id'] = None
-            is_engaged = False
-            engagement_prob = 0.0
-            converted_data['is_engaged'] = is_engaged
-            satisfaction_score = 50.0
-            converted_data['satisfaction_score'] = satisfaction_score
-            if satisfaction_score >= 85:
-                converted_data['satisfaction_class'] = "MUITO_POSITIVA"
-            elif satisfaction_score >= 70:
-                converted_data['satisfaction_class'] = "POSITIVA"
-            elif satisfaction_score >= 50:
-                converted_data['satisfaction_class'] = "NEUTRA"
-            elif satisfaction_score >= 30:
-                converted_data['satisfaction_class'] = "NEGATIVA"
-            else:
-                converted_data['satisfaction_class'] = "MUITO_NEGATIVA"
-            print("\n" + "="*50)
-            print("📡 DADOS DO RADAR DETECTADOS")
-            print("="*50)
-            print(f"⏰ Timestamp: {converted_data['timestamp']}")
-            print("")
-            if section:
-                print(f"📍 LOCALIZAÇÃO:")
-                print(f"   Seção: {section['section_name']}")
-                print(f"   Produto: {section['product_id']}")
-            else:
-                print(f"📍 LOCALIZAÇÃO:")
-                print("   ⚠️ Fora das seções monitoradas")
-                print("   Produto: N/A")
-            print("")
-            print(f"📊 DADOS DE POSIÇÃO:")
-            print(f"   Distância: {converted_data['distance']:.2f} cm")
-            print(f"   Velocidade: {converted_data['move_speed']:.2f} cm/s")
-            print("")
-            print(f"❤️ SINAIS VITAIS:")
-            if heart_rate is not None and breath_rate is not None:
-                print(f"   Batimentos: {heart_rate:.1f} bpm")
-                print(f"   Respiração: {breath_rate:.1f} rpm")
-            else:
-                print("   ⚠️ Aguardando detecção de sinais vitais...")
-            print("")
-            print(f"🎯 ANÁLISE:")
-            print(f"   Engajado: {'✅ Sim' if is_engaged else '❌ Não'}")
-            print(f"   Score: {converted_data['satisfaction_score']:.1f}")
-            print(f"   Classificação: {converted_data['satisfaction_class']}")
-            print("="*50)
-            print("")
-            if self.db_manager:
-                try:
-                    success = self.db_manager.insert_radar_data(converted_data)
-                    if success:
-                        logger.debug("✅ Dados enviados para o Google Sheets!")
-                    else:
-                        logger.error("❌ Falha ao enviar dados para o Google Sheets")
-                except Exception as e:
-                    logger.error(f"❌ Erro ao enviar para o Google Sheets: {str(e)}")
-                    logger.error(traceback.format_exc())
-            else:
-                logger.warning("⚠️ Gerenciador de planilha não disponível")
-        except Exception as e:
-            logger.error(f"❌ Erro ao processar dados: {str(e)}")
-            logger.error(traceback.format_exc())
+        distance = data.get('distance', 0)
+        if distance == 0:
+            x = data.get('x_point', 0)
+            y = data.get('y_point', 0)
+            distance = (x**2 + y**2)**0.5
+        dop_index = data.get('dop_index', 0)
+        move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else 0
+        
+        converted_data = {
+            'session_id': self.current_session_id,
+            'x_point': data.get('x_point', 0),
+            'y_point': data.get('y_point', 0),
+            'move_speed': move_speed,
+            'distance': distance,
+            'dop_index': dop_index,
+            'heart_rate': heart_rate,
+            'breath_rate': breath_rate,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        section = shelf_manager.get_section_at_position(
+            converted_data['x_point'],
+            converted_data['y_point'],
+            self.db_manager
+        )
+        
+        if section:
+            converted_data['section_id'] = section['section_id']
+            converted_data['product_id'] = section['product_id']
+        else:
+            converted_data['section_id'] = None
+            converted_data['product_id'] = None
+        
+        # Lógica de engajamento
+        is_engaged = False
+        if section:
+            is_engaged = self._check_engagement(section['section_id'], distance, move_speed)
+        converted_data['is_engaged'] = is_engaged
+        
+        satisfaction_score, satisfaction_class = self.analytics_manager.calculate_satisfaction_score(
+            move_speed, heart_rate, breath_rate, distance
+        )
+        converted_data['satisfaction_score'] = satisfaction_score
+        converted_data['satisfaction_class'] = satisfaction_class
+
+        # Formatação da saída
+        output = [
+            "\n" + "="*50,
+            "📡 DADOS DO RADAR",
+            "="*50,
+            f"⏰ {converted_data['timestamp']}",
+            "-"*50
+        ]
+        
+        if section:
+            output.extend([
+                f"📍 SEÇÃO: {section['section_name']}",
+                f"   Produto ID: {section['product_id']}"
+            ])
+        else:
+            output.extend([
+                "📍 SEÇÃO: Fora da área monitorada",
+                "   Produto ID: N/A"
+            ])
+        
+        output.extend([
+            "-"*50,
+            "📊 POSIÇÃO:",
+            f"   X: {converted_data['x_point']:>6.2f} m",
+            f"   Y: {converted_data['y_point']:>6.2f} m",
+            f"   Distância: {converted_data['distance']:>6.2f} m",
+            f"   Velocidade: {converted_data['move_speed']:>6.2f} cm/s",
+            "-"*50,
+            "❤️ SINAIS VITAIS:"
+        ])
+        
+        if heart_rate is not None and breath_rate is not None:
+            output.extend([
+                f"   Batimentos: {heart_rate:>6.1f} bpm",
+                f"   Respiração: {breath_rate:>6.1f} rpm"
+            ])
+        else:
+            output.append("   ⚠️ Aguardando detecção...")
+        
+        output.extend([
+            "-"*50,
+            "🎯 ANÁLISE:",
+            f"   Engajamento: {'✅ Sim' if is_engaged else '❌ Não'}",
+            f"   Score: {converted_data['satisfaction_score']:>6.1f}",
+            f"   Classificação: {converted_data['satisfaction_class']}",
+            "="*50 + "\n"
+        ])
+        
+        # Exibe a saída formatada
+        logger.info("\n".join(output))
+        
+        if self.db_manager:
+            try:
+                success = self.db_manager.insert_radar_data(converted_data)
+                if success:
+                    logger.debug("Dados enviados para o Google Sheets")
+                else:
+                    logger.error("Falha ao enviar dados para o Google Sheets")
+            except Exception as e:
+                logger.error(f"Erro ao enviar para o Google Sheets: {str(e)}")
+                logger.error(traceback.format_exc())
+        else:
+            logger.warning("Gerenciador de planilha não disponível")
 
 def main():
     logger.info("Iniciando GoogleSheetsManager...")
@@ -637,7 +737,9 @@ def main():
         logger.error(f"❌ Erro ao criar instância do GoogleSheetsManager: {e}")
         logger.error(traceback.format_exc())
         return
-    port = os.getenv("SERIAL_PORT")
+    
+    # Definindo a porta serial diretamente
+    port = '/dev/tty.usbmodem1101'
     baudrate = int(os.getenv("SERIAL_BAUDRATE", "115200"))
     radar_manager = SerialRadarManager(port, baudrate)
     try:
