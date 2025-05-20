@@ -31,7 +31,7 @@ logging.getLogger('gspread').setLevel(logging.WARNING)
 load_dotenv()
 
 SERIAL_CONFIG = {
-    'port': os.getenv('SERIAL_PORT', '/dev/tty.usbmodem1101'),
+    'port': os.getenv('SERIAL_PORT', '/dev/ttyACM0'),
     'baudrate': int(os.getenv('SERIAL_BAUDRATE', 115200))
 }
 RANGE_STEP = 2.5
@@ -731,7 +731,11 @@ class SerialRadarManager:
 def main():
     logger.info("Iniciando GoogleSheetsManager...")
     try:
-        gsheets_manager = GoogleSheetsManager('serial_radar/credenciais.json', 'codigo_rasp')
+        # Obtém o caminho absoluto do diretório onde o script está localizado
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Constrói o caminho absoluto para o arquivo de credenciais
+        credentials_file_path = os.path.join(script_dir, 'serial_radar', 'credenciais.json')
+        gsheets_manager = GoogleSheetsManager(credentials_file_path, 'codigo_rasp')
         logger.info("✅ GoogleSheetsManager iniciado com sucesso!")
     except Exception as e:
         logger.error(f"❌ Erro ao criar instância do GoogleSheetsManager: {e}")
@@ -739,7 +743,7 @@ def main():
         return
     
     # Definindo a porta serial diretamente
-    port = '/dev/tty.usbmodem1101'
+    port = '/dev/ttyACM0'
     baudrate = int(os.getenv("SERIAL_BAUDRATE", "115200"))
     radar_manager = SerialRadarManager(port, baudrate)
     try:
