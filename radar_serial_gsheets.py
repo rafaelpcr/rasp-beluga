@@ -439,20 +439,13 @@ class SerialRadarManager:
         self.vital_signs_manager = VitalSignsManager()
         self.current_session_id = None
         self.last_activity_time = None
-        self.SESSION_TIMEOUT = 60  # 1 minuto para identificar novas pessoas
-        self.last_valid_data_time = time.time()  # Timestamp do último dado válido
-        self.RESET_TIMEOUT = 300  # 5 minutos para reset do radar
+        self.SESSION_TIMEOUT = 300  # 5 minutos em segundos
         # Buffer para engajamento
         self.engagement_buffer = []
-        self.ENGAGEMENT_WINDOW = 1
-        self.ENGAGEMENT_DISTANCE = 1.0
-        self.ENGAGEMENT_SPEED = 10.0
-        self.ENGAGEMENT_MIN_COUNT = 1
-        # Parâmetros para detecção de pessoas
-        self.last_position = None
-        self.POSITION_THRESHOLD = 0.5
-        self.MOVEMENT_THRESHOLD = 20.0
-        self.session_positions = []
+        self.ENGAGEMENT_WINDOW = 1  # Alterado para 1 leitura (5 segundos)
+        self.ENGAGEMENT_DISTANCE = 1.0  # metros
+        self.ENGAGEMENT_SPEED = 10.0  # cm/s
+        self.ENGAGEMENT_MIN_COUNT = 1  # Alterado para 1 leitura (5 segundos)
 
     def _generate_session_id(self):
         """Gera um novo ID de sessão"""
@@ -464,43 +457,17 @@ class SerialRadarManager:
             logger.debug("Sessão expirada, gerando nova sessão")
             self.current_session_id = self._generate_session_id()
             self.last_activity_time = time.time()
-            self.session_positions = []  # Limpa histórico de posições
             return True
-        return False
-
-    def _is_new_person(self, x, y, move_speed):
-        """Verifica se os dados indicam uma nova pessoa"""
-        if not self.last_position:
-            return True
-
-        last_x, last_y = self.last_position
-        distance = math.sqrt((x - last_x)**2 + (y - last_y)**2)
-        
-        # Se a distância for muito grande ou a velocidade for muito alta, provavelmente é uma nova pessoa
-        if distance > self.POSITION_THRESHOLD or move_speed > self.MOVEMENT_THRESHOLD:
-            return True
-            
-        # Verifica se o movimento é consistente com a última posição
-        if len(self.session_positions) >= 2:
-            last_positions = self.session_positions[-2:]
-            avg_speed = sum(p['speed'] for p in last_positions) / len(last_positions)
-            if abs(move_speed - avg_speed) > self.MOVEMENT_THRESHOLD:
-                return True
-                
         return False
 
     def _update_session(self):
         """Atualiza ou cria uma nova sessão"""
-        current_time = time.time()
-        
-        # Verifica timeout da sessão
         if not self.current_session_id or self._check_session_timeout():
             self.current_session_id = self._generate_session_id()
-            self.last_activity_time = current_time
-            self.session_positions = []  # Limpa histórico de posições
+            self.last_activity_time = time.time()
             logger.debug(f"Nova sessão iniciada: {self.current_session_id}")
         else:
-            self.last_activity_time = current_time
+            self.last_activity_time = time.time()
 
     def find_serial_port(self):
         import serial.tools.list_ports
@@ -568,9 +535,7 @@ class SerialRadarManager:
         message_buffer = ""
         target_data_complete = False
         last_data_time = time.time()
-        
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
-        
         while self.is_running:
             try:
                 if not self.serial_connection.is_open:
@@ -578,97 +543,43 @@ class SerialRadarManager:
                     self.connect()
                     time.sleep(1)
                     continue
-                    
-                # Ler dados disponíveis
                 in_waiting = self.serial_connection.in_waiting
                 if in_waiting is None:
                     in_waiting = 0
-                
                 data = self.serial_connection.read(in_waiting or 1)
                 if data:
                     last_data_time = time.time()
-                    self.last_valid_data_time = time.time()  # Atualiza o timestamp da última leitura válida
                     text = data.decode('utf-8', errors='ignore')
+                    logger.debug(f"Dados recebidos: {text}")  # Log dos dados brutos
                     buffer += text
-                    
-                    # Verificar se temos linhas completas
                     if '\n' in buffer:
                         lines = buffer.split('\n')
-                        buffer = lines[-1]  # Manter o que sobrar após o último newline
-                        
-                        # Processar linhas completas
+                        buffer = lines[-1]
                         for line in lines[:-1]:
                             line = line.strip()
-                            
-                            # Início de uma mensagem de detecção
+                            logger.debug(f"Processando linha: {line}")  # Log de cada linha
                             if '-----Human Detected-----' in line:
-                                message_mode = True
-                                message_buffer = line + '\n'
-                                target_data_complete = False
-                            # Continuação da mensagem de detecção
+                                if not message_mode:
+                                    message_mode = True
+                                    message_buffer = line + '\n'
+                                    target_data_complete = False
                             elif message_mode:
                                 message_buffer += line + '\n'
-                                
-                                # Verificar se a mensagem está completa
-                                if 'distance:' in line:  # Último campo enviado pelo radar
+                                if 'move_speed:' in line:
                                     target_data_complete = True
-                                    # Processar os dados coletados
+                                    logger.debug(f"Mensagem completa recebida:\n{message_buffer}")  # Log da mensagem completa
                                     self.process_radar_data(message_buffer)
                                     message_mode = False
                                     message_buffer = ""
                                     target_data_complete = False
-                
-                # Verificar se precisa fazer reset (apenas se não houver dados por 5 minutos)
-                current_time = time.time()
-                if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
-                    logger.warning("⚠️ Nenhum dado recebido por mais de 5 minutos. Executando reset do radar...")
-                    self.reset_radar()
-                    self.last_valid_data_time = current_time  # Reseta o timestamp após o reset
-                
-                # Verificar se está recebendo dados
-                if time.time() - last_data_time > 5:  # 5 segundos sem dados
+                if time.time() - last_data_time > 5:
                     logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
                     last_data_time = time.time()
-                
-                # Pequena pausa para evitar consumo excessivo de CPU
                 time.sleep(0.01)
-                
             except Exception as e:
                 logger.error(f"❌ Erro no loop de recepção: {str(e)}")
                 logger.error(traceback.format_exc())
-                time.sleep(1)  # Pausa para evitar spam de logs em caso de erro
-
-    def reset_radar(self):
-        """Executa um reset no radar"""
-        try:
-            logger.info("🔄 Iniciando reset do radar...")
-            
-            # Desconecta o radar
-            if self.serial_connection and self.serial_connection.is_open:
-                self.serial_connection.close()
-                time.sleep(1)  # Aguarda 1 segundo
-            
-            # Reconecta o radar
-            self.serial_connection = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                timeout=1,
-                write_timeout=1,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE
-            )
-            
-            # Envia comando de reset (ajuste conforme necessário para seu radar)
-            self.serial_connection.write(b'RESET\n')
-            time.sleep(2)  # Aguarda 2 segundos para o reset completar
-            
-            logger.info("✅ Reset do radar concluído com sucesso!")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Erro ao resetar o radar: {str(e)}")
-            return False
+                time.sleep(1)
 
     def _check_engagement(self, section_id, distance, move_speed):
         # Adiciona leitura ao buffer
@@ -692,31 +603,6 @@ class SerialRadarManager:
         data = parse_serial_data(raw_data)
         if not data:
             return
-
-        # Extrair dados relevantes
-        x = data.get('x_point', 0)
-        y = data.get('y_point', 0)
-        move_speed = abs(data.get('dop_index', 0) * RANGE_STEP)
-        
-        # Verifica se é uma nova pessoa
-        if self._is_new_person(x, y, move_speed):
-            self.current_session_id = self._generate_session_id()
-            self.last_activity_time = time.time()
-            self.session_positions = []
-            logger.debug(f"Nova pessoa detectada, iniciando sessão: {self.current_session_id}")
-        
-        # Atualiza posição atual
-        self.last_position = (x, y)
-        self.session_positions.append({
-            'x': x,
-            'y': y,
-            'speed': move_speed,
-            'timestamp': time.time()
-        })
-        
-        # Mantém apenas as últimas 10 posições
-        if len(self.session_positions) > 10:
-            self.session_positions.pop(0)
 
         # Atualiza a sessão
         self._update_session()
