@@ -562,12 +562,44 @@ class SerialRadarManager:
             self.receive_thread.join(timeout=2)
         logger.info("Receptor de dados seriais parado!")
 
+    def hardware_reset_esp32(self):
+        """
+        Reinicia a ESP32 via pulso nas linhas DTR/RTS da porta serial.
+        Não interfere na conexão principal do radar.
+        """
+        try:
+            logger.warning("[ESP32 RESET] Iniciando reset via DTR/RTS na porta serial...")
+            # Fecha a conexão principal se estiver aberta
+            was_open = False
+            if self.serial_connection and self.serial_connection.is_open:
+                self.serial_connection.close()
+                was_open = True
+            # Abre uma conexão temporária só para reset
+            with serial.Serial(self.port, self.baudrate, timeout=1) as ser:
+                ser.setDTR(False)
+                ser.setRTS(True)
+                time.sleep(0.1)
+                ser.setDTR(True)
+                ser.setRTS(False)
+                time.sleep(0.1)
+            logger.info("[ESP32 RESET] Pulso de reset enviado com sucesso!")
+            # Reabre a conexão principal se estava aberta
+            if was_open:
+                self.connect()
+            return True
+        except Exception as e:
+            logger.error(f"[ESP32 RESET] Falha ao resetar ESP32: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
     def receive_data_loop(self):
         buffer = ""
         message_mode = False
         message_buffer = ""
         target_data_complete = False
         last_data_time = time.time()
+        self.last_valid_data_time = time.time()
+        self.RESET_TIMEOUT = 300  # 5 minutos
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
         while self.is_running:
             try:
@@ -582,6 +614,7 @@ class SerialRadarManager:
                 data = self.serial_connection.read(in_waiting or 1)
                 if data:
                     last_data_time = time.time()
+                    self.last_valid_data_time = time.time()  # Atualiza o timestamp do último dado válido
                     text = data.decode('utf-8', errors='ignore')
                     logger.debug(f"Dados recebidos: {text}")  # Log dos dados brutos
                     buffer += text
@@ -605,6 +638,12 @@ class SerialRadarManager:
                                     message_mode = False
                                     message_buffer = ""
                                     target_data_complete = False
+                # Reset automático após 5 minutos sem dados
+                current_time = time.time()
+                if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
+                    logger.warning("⚠️ Nenhum dado recebido por mais de 5 minutos. Executando reset automático da ESP32 via DTR/RTS...")
+                    self.hardware_reset_esp32()
+                    self.last_valid_data_time = current_time
                 if time.time() - last_data_time > 5:
                     logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
                     last_data_time = time.time()
