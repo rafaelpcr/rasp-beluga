@@ -568,9 +568,7 @@ class SerialRadarManager:
         message_buffer = ""
         target_data_complete = False
         last_data_time = time.time()
-        
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
-        
         while self.is_running:
             try:
                 if not self.serial_connection.is_open:
@@ -578,65 +576,43 @@ class SerialRadarManager:
                     self.connect()
                     time.sleep(1)
                     continue
-                    
-                # Ler dados disponíveis
                 in_waiting = self.serial_connection.in_waiting
                 if in_waiting is None:
                     in_waiting = 0
-                
                 data = self.serial_connection.read(in_waiting or 1)
                 if data:
                     last_data_time = time.time()
-                    self.last_valid_data_time = time.time()  # Atualiza o timestamp da última leitura válida
                     text = data.decode('utf-8', errors='ignore')
+                    logger.debug(f"Dados recebidos: {text}")  # Log dos dados brutos
                     buffer += text
-                    
-                    # Verificar se temos linhas completas
                     if '\n' in buffer:
                         lines = buffer.split('\n')
-                        buffer = lines[-1]  # Manter o que sobrar após o último newline
-                        
-                        # Processar linhas completas
+                        buffer = lines[-1]
                         for line in lines[:-1]:
                             line = line.strip()
-                            
-                            # Início de uma mensagem de detecção
+                            logger.debug(f"Processando linha: {line}")  # Log de cada linha
                             if '-----Human Detected-----' in line:
-                                message_mode = True
-                                message_buffer = line + '\n'
-                                target_data_complete = False
-                            # Continuação da mensagem de detecção
+                                if not message_mode:
+                                    message_mode = True
+                                    message_buffer = line + '\n'
+                                    target_data_complete = False
                             elif message_mode:
                                 message_buffer += line + '\n'
-                                
-                                # Verificar se a mensagem está completa
-                                if 'distance:' in line:  # Último campo enviado pelo radar
+                                if 'move_speed:' in line:
                                     target_data_complete = True
-                                    # Processar os dados coletados
+                                    logger.debug(f"Mensagem completa recebida:\n{message_buffer}")  # Log da mensagem completa
                                     self.process_radar_data(message_buffer)
                                     message_mode = False
                                     message_buffer = ""
                                     target_data_complete = False
-                
-                # Verificar se precisa fazer reset (apenas se não houver dados por 5 minutos)
-                current_time = time.time()
-                if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
-                    logger.warning("⚠️ Nenhum dado recebido por mais de 5 minutos. Executando reset do radar...")
-                    self.reset_radar()
-                    self.last_valid_data_time = current_time  # Reseta o timestamp após o reset
-                
-                # Verificar se está recebendo dados
-                if time.time() - last_data_time > 5:  # 5 segundos sem dados
+                if time.time() - last_data_time > 5:
                     logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
                     last_data_time = time.time()
-                
-                # Pequena pausa para evitar consumo excessivo de CPU
                 time.sleep(0.01)
-                
             except Exception as e:
                 logger.error(f"❌ Erro no loop de recepção: {str(e)}")
                 logger.error(traceback.format_exc())
-                time.sleep(1)  # Pausa para evitar spam de logs em caso de erro
+                time.sleep(1)
 
     def reset_radar(self):
         """Executa um reset no radar"""
