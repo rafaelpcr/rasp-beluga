@@ -615,7 +615,6 @@ class SerialRadarManager:
                 data = self.serial_connection.read(in_waiting or 1)
                 if data:
                     last_data_time = time.time()
-                    self.last_valid_data_time = time.time()  # Atualiza o timestamp do último dado válido
                     text = data.decode('utf-8', errors='ignore')
                     logger.debug(f"Dados recebidos: {text}")  # Log dos dados brutos
                     buffer += text
@@ -636,6 +635,7 @@ class SerialRadarManager:
                                     target_data_complete = True
                                     logger.debug(f"Mensagem completa recebida:\n{message_buffer}")  # Log da mensagem completa
                                     self.process_radar_data(message_buffer)
+                                    self.last_valid_data_time = time.time()  # Atualiza SOMENTE ao processar mensagem completa
                                     message_mode = False
                                     message_buffer = ""
                                     target_data_complete = False
