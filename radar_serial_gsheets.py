@@ -441,7 +441,7 @@ class SerialRadarManager:
         self.last_activity_time = None
         self.SESSION_TIMEOUT = 60  # 1 minuto para identificar novas pessoas
         self.last_valid_data_time = time.time()  # Timestamp do último dado válido
-        self.RESET_TIMEOUT = 300  # 5 minutos para reset do radar
+        self.RESET_TIMEOUT = 60  # 1 minuto
         # Buffer para engajamento
         self.engagement_buffer = []
         self.ENGAGEMENT_WINDOW = 1
@@ -598,8 +598,9 @@ class SerialRadarManager:
         message_buffer = ""
         target_data_complete = False
         last_data_time = time.time()
-        self.last_valid_data_time = time.time()
-        self.RESET_TIMEOUT = 300  # 5 minutos
+        if not hasattr(self, 'last_valid_data_time'):
+            self.last_valid_data_time = time.time()
+        self.RESET_TIMEOUT = 60  # 1 minuto
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
         while self.is_running:
             try:
@@ -638,10 +639,10 @@ class SerialRadarManager:
                                     message_mode = False
                                     message_buffer = ""
                                     target_data_complete = False
-                # Reset automático após 5 minutos sem dados
                 current_time = time.time()
+                logger.warning(f"[DEBUG RESET] Agora: {current_time}, Último dado: {self.last_valid_data_time}, Diferença: {current_time - self.last_valid_data_time}")
                 if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
-                    logger.warning("⚠️ Nenhum dado recebido por mais de 5 minutos. Executando reset automático da ESP32 via DTR/RTS...")
+                    logger.warning("⚠️ Nenhum dado recebido por mais de 1 minuto. Executando reset automático da ESP32 via DTR/RTS...")
                     self.hardware_reset_esp32()
                     self.last_valid_data_time = current_time
                 if time.time() - last_data_time > 5:
