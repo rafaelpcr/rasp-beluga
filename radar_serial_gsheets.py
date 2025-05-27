@@ -518,9 +518,16 @@ class SerialRadarManager:
         return ports[0].device
 
     def connect(self):
-        if not self.port:
-            logger.error("Porta serial não especificada!")
-            return False
+        # Se a porta não existir mais, tenta detectar automaticamente
+        if not self.port or not os.path.exists(self.port):
+            logger.warning(f"Porta serial {self.port} não encontrada. Tentando detectar automaticamente...")
+            detected_port = self.find_serial_port()
+            if detected_port:
+                self.port = detected_port
+                logger.info(f"Porta serial detectada automaticamente: {self.port}")
+            else:
+                logger.error("Nenhuma porta serial disponível para conexão!")
+                return False
         try:
             logger.info(f"Conectando à porta serial {self.port} (baudrate: {self.baudrate})...")
             self.serial_connection = serial.Serial(
