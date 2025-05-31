@@ -559,6 +559,8 @@ class RadarCounterManager:
 
     def receive_data_loop(self):
         """Loop principal de recebimento de dados"""
+        import sys
+        import os
         buffer = ""
         logger.info(f"{self.color} {self.radar_name}: 🔄 Loop de dados iniciado...")
         while self.is_running:
@@ -582,13 +584,29 @@ class RadarCounterManager:
                                 continue
                             try:
                                 data_json = json.loads(line)
-                                print("[DEBUG] JSON recebido:", data_json)
                                 radar_id = data_json.get("radar_id", self.radar_id)
                                 timestamp_ms = data_json.get("timestamp_ms", 0)
                                 person_count = data_json.get("person_count", 0)
                                 active_people = data_json.get("active_people", [])
-                                print(f"[DEBUG] person_count: {person_count} | active_people: {active_people}")
                                 self.last_person_count = person_count  # Atualiza o contador para o resumo
+                                # Exibição bonita em tempo real
+                                os.system('clear')  # Limpa o terminal (funciona no Linux/Mac)
+                                print(f"\n{self.color} ═══ {self.radar_name.upper()} ═══")
+                                print(f"⏰ Timestamp: {timestamp_ms} ms")
+                                print(f"👥 Pessoas detectadas: {person_count}")
+                                if active_people:
+                                    print(f"{'ID':<4} {'Zona':<12} {'Distância(m)':<14} {'X':<10} {'Y':<10}")
+                                    print("-"*50)
+                                    for person in active_people:
+                                        person_id = person.get("id", "")
+                                        x_pos = person.get("x_pos", "")
+                                        y_pos = person.get("y_pos", "")
+                                        distance_smoothed = person.get("distance_smoothed", "")
+                                        zone = person.get("zone", "")
+                                        print(f"{person_id:<4} {zone:<12} {distance_smoothed:<14.3f} {x_pos:<10.3f} {y_pos:<10.3f}")
+                                else:
+                                    print("Nenhuma pessoa detectada no momento.")
+                                # Planilha
                                 if active_people:
                                     for person in active_people:
                                         person_id = person.get("id", "")
@@ -601,7 +619,6 @@ class RadarCounterManager:
                                         if self.gsheets_manager:
                                             self.gsheets_manager.worksheet.append_row(row)
                                 else:
-                                    # Se não houver pessoas, salva linha com campos de pessoa vazios
                                     row = [radar_id, timestamp_ms, person_count, "", "", "", "", "", ""]
                                     if self.gsheets_manager:
                                         self.gsheets_manager.worksheet.append_row(row)
