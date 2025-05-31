@@ -470,6 +470,7 @@ class RadarCounterManager:
         # Controle de output
         self.last_output_time = time.time()
         self.OUTPUT_INTERVAL = 10  # 10 segundos entre outputs
+        self.last_person_count = 0  # Novo: armazena o último person_count recebido
 
     def find_serial_port(self):
         """Detecta automaticamente a porta serial se a configurada não existir"""
@@ -587,6 +588,7 @@ class RadarCounterManager:
                                 person_count = data_json.get("person_count", 0)
                                 active_people = data_json.get("active_people", [])
                                 print(f"[DEBUG] person_count: {person_count} | active_people: {active_people}")
+                                self.last_person_count = person_count  # Atualiza o contador para o resumo
                                 if active_people:
                                     for person in active_people:
                                         person_id = person.get("id", "")
@@ -658,7 +660,7 @@ class RadarCounterManager:
 
     def output_statistics(self):
         """Exibir estatísticas atuais do contador"""
-        current_count = self.people_counter.get_current_count()
+        current_count = self.get_current_count()
         
         # Contar pessoas por zona
         zone_counts = defaultdict(int)
@@ -690,6 +692,10 @@ class RadarCounterManager:
         ]
         
         logger.info("\n".join(output))
+
+    def get_current_count(self):
+        """Retorna o último person_count recebido do Arduino"""
+        return self.last_person_count
 
 class EstandeCounterSystem:
     def __init__(self):
@@ -796,7 +802,7 @@ class EstandeCounterSystem:
                 'running': radar.is_running,
                 'connected': radar.serial_connection and radar.serial_connection.is_open if radar.serial_connection else False,
                 'description': radar.description,
-                'current_count': radar.people_counter.get_current_count() if radar.is_running else 0,
+                'current_count': radar.get_current_count() if radar.is_running else 0,
                 'total_entries': radar.people_counter.total_entries if radar.is_running else 0
             }
             status['radars'].append(radar_status)
