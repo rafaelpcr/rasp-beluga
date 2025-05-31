@@ -582,14 +582,25 @@ class RadarCounterManager:
                             try:
                                 data_json = json.loads(line)
                                 radar_id = data_json.get("radar_id", self.radar_id)
-                                interesse = data_json.get("interesse", 0)
-                                passagem = data_json.get("passagem", 0)
-                                total = data_json.get("total", 0)
+                                max_interesse = data_json.get("max_interesse", 0)
+                                max_passagem = data_json.get("max_passagem", 0)
+                                max_total = data_json.get("max_total", 0)
                                 timestamp = data_json.get("timestamp", 0)
                                 samples = data_json.get("samples", 0)
-                                row = [radar_id, interesse, passagem, total, timestamp, samples]
-                                if self.gsheets_manager:
-                                    self.gsheets_manager.worksheet.append_row(row)
+                                detections = data_json.get("detections", [])
+                                if detections:
+                                    for det in detections:
+                                        x = det.get("x", "")
+                                        y = det.get("y", "")
+                                        zona = det.get("zona", "")
+                                        row = [radar_id, max_interesse, max_passagem, max_total, timestamp, samples, x, y, zona]
+                                        if self.gsheets_manager:
+                                            self.gsheets_manager.worksheet.append_row(row)
+                                else:
+                                    # Se não houver detecções, salva linha com x, y, zona vazios
+                                    row = [radar_id, max_interesse, max_passagem, max_total, timestamp, samples, "", "", ""]
+                                    if self.gsheets_manager:
+                                        self.gsheets_manager.worksheet.append_row(row)
                             except Exception as e:
                                 logger.error(f"Erro ao processar linha JSON: {e}")
                 time.sleep(0.01)
@@ -669,7 +680,7 @@ class RadarCounterManager:
             f"👤 Pessoas Ativas: {current_count}",
             f"🎯 Zona {zone1_name}: {zone_counts[zone1_name]} pessoas",
             f"🚶 Zona {zone2_name}: {zone_counts[zone2_name]} pessoas",
-            f"�� Máximo Simultâneo: {self.people_counter.max_simultaneous}",
+            f"🎯 Máximo Simultâneo: {self.people_counter.max_simultaneous}",
             f"🎯 Total Entradas: {self.people_counter.total_entries}",
             f"🚶 Total Saídas: {self.people_counter.total_exits}",
             f"⏱️ Duração da Sessão: {time.time() - self.people_counter.session_start_time:.0f}s",
