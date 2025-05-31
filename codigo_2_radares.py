@@ -470,10 +470,6 @@ class RadarCounterManager:
         # Controle de output
         self.last_output_time = time.time()
         self.OUTPUT_INTERVAL = 10  # 10 segundos entre outputs
-        self.buffer_lock = threading.Lock()
-        self.sheet_buffer = []
-        self.last_sheet_flush = time.time()
-        self.SHEET_FLUSH_INTERVAL = 10  # segundos
 
     def find_serial_port(self):
         """Detecta automaticamente a porta serial se a configurada não existir"""
@@ -558,19 +554,7 @@ class RadarCounterManager:
         if self.receive_thread and self.receive_thread.is_alive():
             self.receive_thread.join(timeout=2)
         
-        logger.info(f"{self.color} {self.radar_name}: �� Parado!")
-
-    def flush_sheet_buffer(self):
-        """Envia o buffer acumulado para o Google Sheets em lote"""
-        with self.buffer_lock:
-            if self.gsheets_manager and self.sheet_buffer:
-                try:
-                    self.gsheets_manager.worksheet.append_rows(self.sheet_buffer)
-                    self.sheet_buffer.clear()
-                    logger.info(f"{self.color} {self.radar_name}: ✅ {len(self.sheet_buffer)} linhas enviadas em lote para Sheets")
-                except Exception as e:
-                    logger.error(f"{self.color} {self.radar_name}: ❌ Erro ao enviar lote para Sheets: {e}")
-                    # Não limpa o buffer para tentar novamente depois
+        logger.info(f"{self.color} {self.radar_name}: 🛑 Parado!")
 
     def receive_data_loop(self):
         """Loop principal de recebimento de dados"""
@@ -598,33 +582,27 @@ class RadarCounterManager:
                             try:
                                 data_json = json.loads(line)
                                 radar_id = data_json.get("radar_id", self.radar_id)
-                                max_interesse = data_json.get("max_interesse", 0)
-                                max_passagem = data_json.get("max_passagem", 0)
-                                max_total = data_json.get("max_total", 0)
-                                timestamp = data_json.get("timestamp", 0)
-                                samples = data_json.get("samples", 0)
-                                detections = data_json.get("detections", [])
-                                rows_to_add = []
-                                if detections:
-                                    for det in detections:
-                                        x = det.get("x", "")
-                                        y = det.get("y", "")
-                                        zona = det.get("zona", "")
-                                        row = [radar_id, max_interesse, max_passagem, max_total, timestamp, samples, x, y, zona]
-                                        rows_to_add.append(row)
+                                timestamp_ms = data_json.get("timestamp_ms", 0)
+                                person_count = data_json.get("person_count", 0)
+                                active_people = data_json.get("active_people", [])
+                                if active_people:
+                                    for person in active_people:
+                                        person_id = person.get("id", "")
+                                        x_pos = person.get("x_pos", "")
+                                        y_pos = person.get("y_pos", "")
+                                        distance_raw = person.get("distance_raw", "")
+                                        distance_smoothed = person.get("distance_smoothed", "")
+                                        zone = person.get("zone", "")
+                                        row = [radar_id, timestamp_ms, person_count, person_id, x_pos, y_pos, distance_raw, distance_smoothed, zone]
+                                        if self.gsheets_manager:
+                                            self.gsheets_manager.worksheet.append_row(row)
                                 else:
-                                    row = [radar_id, max_interesse, max_passagem, max_total, timestamp, samples, "", "", ""]
-                                    rows_to_add.append(row)
-                                # Adiciona ao buffer de forma thread-safe
-                                with self.buffer_lock:
-                                    self.sheet_buffer.extend(rows_to_add)
+                                    # Se não houver pessoas, salva linha com campos de pessoa vazios
+                                    row = [radar_id, timestamp_ms, person_count, "", "", "", "", "", ""]
+                                    if self.gsheets_manager:
+                                        self.gsheets_manager.worksheet.append_row(row)
                             except Exception as e:
                                 logger.error(f"Erro ao processar linha JSON: {e}")
-                # Envio em lote a cada SHEET_FLUSH_INTERVAL segundos
-                now = time.time()
-                if now - self.last_sheet_flush >= self.SHEET_FLUSH_INTERVAL:
-                    self.flush_sheet_buffer()
-                    self.last_sheet_flush = now
                 time.sleep(0.01)
             except Exception as e:
                 logger.error(f"{self.color} {self.radar_name}: ❌ Erro no loop: {str(e)}")
