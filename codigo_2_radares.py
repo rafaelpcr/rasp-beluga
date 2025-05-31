@@ -581,10 +581,12 @@ class RadarCounterManager:
                                 continue
                             try:
                                 data_json = json.loads(line)
+                                print("[DEBUG] JSON recebido:", data_json)
                                 radar_id = data_json.get("radar_id", self.radar_id)
                                 timestamp_ms = data_json.get("timestamp_ms", 0)
                                 person_count = data_json.get("person_count", 0)
                                 active_people = data_json.get("active_people", [])
+                                print(f"[DEBUG] person_count: {person_count} | active_people: {active_people}")
                                 if active_people:
                                     for person in active_people:
                                         person_id = person.get("id", "")
