@@ -572,14 +572,26 @@ class SingleRadarCounter:
                     # Calcula dados agregados
                     avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
                     zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
-                    zones_str = ",".join(zones_detected)
+                    zones_str = ",".join(sorted(zones_detected))
+                    
+                    # ID mais profissional baseado no contexto
+                    if len(active_people) == 1:
+                        person_description = "Pessoa Individual"
+                    elif len(active_people) <= 3:
+                        person_description = "Grupo Pequeno"
+                    elif len(active_people) <= 10:
+                        person_description = "Grupo Médio"
+                    elif len(active_people) <= 20:
+                        person_description = "Grupo Grande"
+                    else:
+                        person_description = "Multidão"
                     
                     row = [
                         radar_id,                          # 1. radar_id
                         formatted_timestamp,               # 2. timestamp
                         len(active_people),                # 3. person_count (real detectadas agora)
-                        f"Evento_{len(active_people)}p",   # 4. person_id (agregado)
-                        zones_str,                         # 5. zone (todas as zonas)
+                        person_description,                # 4. person_id (descrição profissional)
+                        zones_str,                         # 5. zone (todas as zonas ordenadas)
                         f"{sum(p.get('distance_smoothed', 0) for p in active_people) / len(active_people):.1f}",  # 6. distance (média)
                         f"{avg_confidence:.0f}",           # 7. confidence (média)
                         self.total_people_detected,       # 8. total_detected (nossa contagem real)
