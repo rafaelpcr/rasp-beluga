@@ -35,14 +35,14 @@ logging.getLogger('gspread').setLevel(logging.WARNING)
 
 load_dotenv()
 
-# ✅ CONFIGURAÇÃO DOS DOIS RADARES PARA GRAVATÁ (BASEADO NO codigo_sj1.py)
+# ✅ CONFIGURAÇÃO DOS DOIS RADARES PARA GRAVATÁ - PLANILHAS SEPARADAS
 RADAR_CONFIGS = [
     {
         'id': 'RADAR_GRAVATA_EXTERNO',
         'name': 'Contador Gravatá Externo',
         'port': '/dev/ttyACM0',
         'baudrate': 115200,
-        'spreadsheet_id': '1ACu8Qmicxv7Av-1nAK_dIDbcD_RJBizk2iXspixK2Gg',
+        'spreadsheet_id': '17KkL1rm1pCJ1Q57FAzyZKqR0lQyPqdiqCjO1mf1QKGQ',  # ✅ Planilha externa correta
         'color': '🔴',
         'area_tipo': 'EXTERNA',
         'description': 'Gravatá Externa: multi-pessoa simultânea, 8.3Hz, até 8 pessoas'
@@ -52,7 +52,7 @@ RADAR_CONFIGS = [
         'name': 'Contador Gravatá Interno',
         'port': '/dev/ttyACM1', 
         'baudrate': 115200,
-        'spreadsheet_id': '1ACu8Qmicxv7Av-1nAK_dIDbcD_RJBizk2iXspixK2Gg',
+        'spreadsheet_id': '1ACu8Qmicxv7Av-1nAK_dIDbcD_RJBizk2iXspixK2Gg',  # ✅ Planilha específica para INTERNA
         'color': '🔵',
         'area_tipo': 'INTERNA',
         'description': 'Gravatá Interna: multi-pessoa simultânea, 8.3Hz, até 8 pessoas'
@@ -348,7 +348,7 @@ class SingleRadarCounter:
         return False
 
     def start(self, gsheets_manager):
-        """Inicia o radar"""
+        """Inicia o radar (método original)"""
         self.gsheets_manager = gsheets_manager
         
         if not self.connect():
@@ -359,6 +359,22 @@ class SingleRadarCounter:
         self.receive_thread.start()
         
         logger.info(f"{self.color} 🚀 Radar {self.area_tipo} iniciado com sucesso!")
+        return True
+
+    def start_with_existing_manager(self):
+        """✅ Inicia o radar usando gsheets_manager já configurado"""
+        if not self.gsheets_manager:
+            logger.error(f"{self.color} ❌ GoogleSheetsManager não configurado para {self.area_tipo}")
+            return False
+        
+        if not self.connect():
+            return False
+        
+        self.is_running = True
+        self.receive_thread = threading.Thread(target=self.receive_data_loop, daemon=True)
+        self.receive_thread.start()
+        
+        logger.info(f"{self.color} 🚀 Radar {self.area_tipo} iniciado com planilha separada!")
         return True
 
     def stop(self):
@@ -678,9 +694,9 @@ class SingleRadarCounter:
                     else:
                         person_description = "Multidão"
 
-                    # ✅ FORMATO SANTA CRUZ (9 campos) + radar_id modificado para área
+                    # ✅ FORMATO SANTA CRUZ (9 campos) - planilha separada por área
                     row = [
-                        f"{radar_id}_{self.area_tipo}",    # 1. radar_id (com área)
+                        radar_id,                          # 1. radar_id (simples, cada área tem planilha própria)
                         formatted_timestamp,               # 2. timestamp
                         len(active_people),                # 3. person_count (real detectadas agora)
                         person_description,                # 4. person_id (descrição profissional)
@@ -721,7 +737,7 @@ class SingleRadarCounter:
                 # ✅ ENVIA DADOS ZERADOS IGUAL AO SANTA CRUZ
                 if self.gsheets_manager and len(self.previous_people) > 0:
                     row = [
-                        f"{radar_id}_{self.area_tipo}",    # 1. radar_id (com área)
+                        radar_id,                          # 1. radar_id (simples, cada área tem planilha própria)
                         formatted_timestamp,               # 2. timestamp
                         0,                                 # 3. person_count (zero)
                         "Area_Vazia",                      # 4. person_id (indicador)
@@ -813,7 +829,6 @@ class SingleRadarCounter:
 class GravataDualRadarSystem:
     def __init__(self):
         self.radars = []
-        self.gsheets_manager = None
         self.is_running = False
 
     def detect_available_ports(self):
@@ -829,7 +844,7 @@ class GravataDualRadarSystem:
         return available_ports
 
     def initialize(self):
-        """Inicializa o sistema dual radar"""
+        """Inicializa o sistema dual radar com planilhas separadas"""
         try:
             # Detecta portas disponíveis
             available_ports = self.detect_available_ports()
@@ -850,7 +865,7 @@ class GravataDualRadarSystem:
                         logger.error(f"❌ Não há portas suficientes para {config['id']}")
                         return False
             
-            # Configura Google Sheets (compartilhado)
+            # ✅ CREDENCIAIS COMPARTILHADAS
             script_dir = os.path.dirname(os.path.abspath(__file__))
             credentials_file = os.path.join(script_dir, CREDENTIALS_FILE)
             
@@ -858,21 +873,22 @@ class GravataDualRadarSystem:
                 logger.error(f"❌ Credenciais não encontradas: {credentials_file}")
                 return False
             
-            # Usa ID da primeira configuração (ambos usam a mesma planilha)
-            spreadsheet_id = RADAR_CONFIGS[0]['spreadsheet_id']
-            
-            self.gsheets_manager = GoogleSheetsManager(
-                credentials_file,
-                spreadsheet_id,
-                'GRAVATA_DUAL'
-            )
-            
-            # Inicializa radares
+            # ✅ INICIALIZA RADARES COM PLANILHAS SEPARADAS
             for config in RADAR_CONFIGS:
+                # Cada radar terá seu próprio GoogleSheetsManager
+                gsheets_manager = GoogleSheetsManager(
+                    credentials_file,
+                    config['spreadsheet_id'],  # ✅ Planilha específica para cada área
+                    config['id']
+                )
+                
                 radar = SingleRadarCounter(config)
+                radar.gsheets_manager = gsheets_manager  # ✅ Atribui planilha específica
                 self.radars.append(radar)
+                
+                logger.info(f"✅ {config['area_tipo']}: Planilha {config['spreadsheet_id'][:8]}...")
             
-            logger.info("✅ Sistema Dual Radar Gravatá inicializado!")
+            logger.info("✅ Sistema Dual Radar Gravatá inicializado com planilhas separadas!")
             return True
             
         except Exception as e:
@@ -880,16 +896,16 @@ class GravataDualRadarSystem:
             return False
 
     def start(self):
-        """Inicia ambos os radares"""
+        """Inicia ambos os radares com planilhas separadas"""
         try:
-            if not self.gsheets_manager:
+            if not self.radars:
                 logger.error("❌ Sistema não inicializado")
                 return False
             
-            # Inicia cada radar
+            # ✅ Inicia cada radar (já tem gsheets_manager próprio)
             failed_radars = []
             for radar in self.radars:
-                if not radar.start(self.gsheets_manager):
+                if not radar.start_with_existing_manager():  # ✅ Usa manager já configurado
                     failed_radars.append(radar.radar_id)
             
             if failed_radars:
@@ -897,7 +913,7 @@ class GravataDualRadarSystem:
                 return False
             
             self.is_running = True
-            logger.info("🚀 Sistema Dual Radar Gravatá ATIVO!")
+            logger.info("🚀 Sistema Dual Radar Gravatá ATIVO com planilhas separadas!")
             return True
             
         except Exception as e:
