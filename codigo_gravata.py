@@ -125,41 +125,51 @@ class ZoneManager:
         
         # Configuração baseada no tipo de área
         if area_tipo == 'EXTERNA':
-            # Zonas para área externa de Gravatá
+            # Área externa: apenas 2 zonas simples baseadas na distância
             self.ZONA_CONFIGS = {
-                'ENTRADA_EXTERNA': {
-                    'x_min': -2.0, 'x_max': 2.0,
-                    'y_min': 0.0, 'y_max': 2.0,
-                    'distance_range': (0.5, 2.5)
+                'AREA_INTERESSE': {
+                    'x_min': -4.0, 'x_max': 4.0,
+                    'y_min': 0.0, 'y_max': 8.0,
+                    'distance_range': (0.3, 3.5)  # Perto = área de interesse
                 },
-                'CENTRO_EXTERNA': {
-                    'x_min': -3.0, 'x_max': 3.0,
-                    'y_min': 2.0, 'y_max': 5.0,
-                    'distance_range': (2.0, 5.5)
-                },
-                'FUNDO_EXTERNA': {
-                    'x_min': -2.5, 'x_max': 2.5,
-                    'y_min': 5.0, 'y_max': 8.0,
-                    'distance_range': (5.0, 8.5)
+                'AREA_PASSAGEM': {
+                    'x_min': -4.0, 'x_max': 4.0,
+                    'y_min': 0.0, 'y_max': 8.0,
+                    'distance_range': (3.5, 8.0)  # Afastado = área de passagem
                 }
             }
         else:  # INTERNA
-            # Zonas para área interna de Gravatá
+            # Área interna: ativações específicas iguais ao Santa Cruz
             self.ZONA_CONFIGS = {
-                'ENTRADA_INTERNA': {
-                    'x_min': -1.5, 'x_max': 1.5,
-                    'y_min': 0.0, 'y_max': 1.5,
-                    'distance_range': (0.3, 2.0)
+                'SALA_REBOCO': {
+                    'x_min': -3.5, 'x_max': -0.3,
+                    'y_min': 0.3, 'y_max': 3.8,
+                    'distance_range': (1.0, 4.0)
                 },
-                'CENTRO_INTERNA': {
-                    'x_min': -2.0, 'x_max': 2.0,
-                    'y_min': 1.5, 'y_max': 4.0,
-                    'distance_range': (1.5, 4.5)
+                'IGREJINHA': {
+                    'x_min': -3.0, 'x_max': -0.2,
+                    'y_min': 2.8, 'y_max': 6.0,
+                    'distance_range': (2.5, 6.0)
                 },
-                'FUNDO_INTERNA': {
-                    'x_min': -1.8, 'x_max': 1.8,
-                    'y_min': 4.0, 'y_max': 6.0,
-                    'distance_range': (4.0, 6.5)
+                'CENTRO': {
+                    'x_min': -1.0, 'x_max': 1.0,
+                    'y_min': 1.0, 'y_max': 4.5,
+                    'distance_range': (2.0, 5.0)
+                },
+                'ARGOLA': {
+                    'x_min': 0.3, 'x_max': 3.0,
+                    'y_min': 4.0, 'y_max': 7.5,
+                    'distance_range': (4.0, 8.0)
+                },
+                'BEIJO': {
+                    'x_min': 0.5, 'x_max': 3.5,
+                    'y_min': 2.0, 'y_max': 5.5,
+                    'distance_range': (3.5, 7.5)
+                },
+                'PESCARIA': {
+                    'x_min': 0.8, 'x_max': 4.0,
+                    'y_min': 0.2, 'y_max': 4.0,
+                    'distance_range': (4.0, 9.0)
                 }
             }
         
@@ -175,14 +185,15 @@ class ZoneManager:
                 return zona_name
         
         # Zonas de fallback baseadas na distância e área
-        if distance <= 1.5:
-            return f'ENTRADA_{self.area_tipo}'
-        elif distance <= 4.0:
-            return f'CENTRO_{self.area_tipo}'
-        elif distance <= 7.0:
-            return f'FUNDO_{self.area_tipo}'
-        else:
-            return f'FORA_{self.area_tipo}'
+        if self.area_tipo == 'EXTERNA':
+            # Área externa: apenas interesse vs passagem
+            if distance <= 3.5:
+                return 'AREA_INTERESSE'
+            else:
+                return 'AREA_PASSAGEM'
+        else:  # INTERNA
+            # Área interna: igual ao Santa Cruz - se não está em ativação específica
+            return 'FORA_ATIVACOES'
     
     def get_distance(self, x, y):
         """Calcular distância do radar"""
@@ -192,14 +203,17 @@ class ZoneManager:
     def get_zone_description(self, zone_name):
         """Retorna descrição amigável da zona"""
         descriptions = {
-            'ENTRADA_EXTERNA': 'Entrada Externa',
-            'CENTRO_EXTERNA': 'Centro Externa', 
-            'FUNDO_EXTERNA': 'Fundo Externa',
-            'ENTRADA_INTERNA': 'Entrada Interna',
-            'CENTRO_INTERNA': 'Centro Interna',
-            'FUNDO_INTERNA': 'Fundo Interna',
-            'FORA_EXTERNA': 'Fora da Área Externa',
-            'FORA_INTERNA': 'Fora da Área Interna'
+            # Área externa (2 zonas simples)
+            'AREA_INTERESSE': 'Área de Interesse',
+            'AREA_PASSAGEM': 'Área de Passagem',
+            # Área interna (ativações específicas iguais ao Santa Cruz)
+            'SALA_REBOCO': 'Sala de Reboco',
+            'IGREJINHA': 'Igrejinha', 
+            'CENTRO': 'Centro',
+            'ARGOLA': 'Jogo da Argola',
+            'BEIJO': 'Barraca do Beijo',
+            'PESCARIA': 'Pescaria',
+            'FORA_ATIVACOES': 'Fora das Ativações'
         }
         return descriptions.get(zone_name, zone_name)
 
@@ -233,10 +247,11 @@ class SingleRadarCounter:
         self.reentry_timeout = 10.0
         self.last_update_time = time.time()
         
-        # Controle de escrita no Google Sheets (ANTI-QUOTA EXCEEDED)
+        # Controle de escrita no Google Sheets (IGUAL AO SANTA CRUZ)
         self.last_sheets_write = 0
         self.sheets_write_interval = 30.0
         self.pending_data = []
+        self.max_pending_lines = 10  # Envia a cada 10 linhas como Santa Cruz
         
         # Estatísticas detalhadas
         self.entries_count = 0
@@ -665,35 +680,45 @@ class SingleRadarCounter:
             logger.error(f"Erro ao processar dados JSON {self.area_tipo}: {e}")
 
     def send_pending_data_to_sheets(self):
-        """Envia dados para Google Sheets de forma controlada"""
+        """Envia dados para Google Sheets de forma controlada (IGUAL AO SANTA CRUZ)"""
         try:
             current_time = time.time()
             
-            if (current_time - self.last_sheets_write) < self.sheets_write_interval:
-                return
+            # Verifica se já passou tempo suficiente desde último envio OU se tem 10+ linhas
+            time_to_send = (current_time - self.last_sheets_write) >= self.sheets_write_interval
+            buffer_full = len(self.pending_data) >= self.max_pending_lines
             
+            if not time_to_send and not buffer_full:
+                return  # Ainda não é hora de enviar
+            
+            # Se não há dados pendentes, não faz nada
             if not self.pending_data or not self.gsheets_manager:
                 return
             
-            data_to_send = self.pending_data[-10:] if len(self.pending_data) > 10 else self.pending_data
+            # Pega apenas os dados mais recentes (máximo 10 linhas por vez)
+            data_to_send = self.pending_data[-self.max_pending_lines:] if len(self.pending_data) > self.max_pending_lines else self.pending_data
             
+            # Envia em lote (mais eficiente)
             if data_to_send:
                 logger.info(f"📊 Enviando {len(data_to_send)} linhas {self.area_tipo} para planilha...")
                 
+                # Envia todas as linhas de uma vez (batch)
                 for row in data_to_send:
                     self.gsheets_manager.worksheet.append_row(row)
-                    time.sleep(0.5)
+                    time.sleep(0.5)  # Pequena pausa entre linhas
                 
                 logger.info(f"✅ {len(data_to_send)} linhas {self.area_tipo} enviadas!")
                 
+                # Atualiza controles
                 self.last_sheets_write = current_time
-                self.pending_data = []
+                self.pending_data = []  # Limpa dados enviados
                 
         except Exception as e:
             logger.error(f"❌ Erro ao enviar dados {self.area_tipo}: {e}")
+            # Em caso de erro, mantém dados para próxima tentativa
             if "quota" in str(e).lower() or "429" in str(e):
-                logger.warning("⚠️ Quota excedida - aumentando intervalo")
-                self.sheets_write_interval = 60.0
+                logger.warning("⚠️ Quota excedida - aumentando intervalo para 60s")
+                self.sheets_write_interval = 60.0  # Aumenta intervalo se quota excedida
 
     def get_current_count(self):
         return len(self.current_people)
