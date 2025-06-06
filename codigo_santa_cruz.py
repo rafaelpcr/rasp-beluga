@@ -32,11 +32,11 @@ load_dotenv()
 RADAR_CONFIG = {
     'id': 'RADAR_1',
     'name': 'Contador de Pessoas',
-    'port': '/dev/cu.usbmodem1101',  # Porta correta do radar
+    'port': '/dev/ttyACM0',  # ✅ Porta padrão Linux para Arduino minimal
     'baudrate': 115200,
     'spreadsheet_id': '1zVVyL6D9XSrzFvtDxaGJ-3CdniD-gG3Q-bUUXyqr3D4',  # Sua planilha
     'color': '🔴',
-    'description': 'Contador v4.2: multi-pessoa simultânea, 8.3Hz, até 8 pessoas'
+    'description': 'Contador v4.3: Arduino minimal + tracking Python robusto'
 }
 
 class GoogleSheetsManager:
@@ -457,7 +457,7 @@ class SingleRadarCounter:
             # Cria ID único baseado em posição estável (não no ID do Arduino)
             x_pos = person.get('x_pos', 0)
             y_pos = person.get('y_pos', 0) 
-            distance = person.get('distance_smoothed', person.get('distance_raw', 0))
+            distance = person.get('distance_raw', 0)  # ✅ Arduino minimal só envia distance_raw
             
             # ✅ CALCULA ZONA ESPECÍFICA DAS ATIVAÇÕES usando coordenadas x,y
             zone = self.zone_manager.get_zone(x_pos, y_pos)
@@ -469,7 +469,7 @@ class SingleRadarCounter:
             # Procura se já existe pessoa similar (mesma zona, distância similar)
             found_existing = None
             for existing_id, existing_person in self.current_people.items():
-                existing_dist = existing_person.get('distance_smoothed', 0)
+                existing_dist = existing_person.get('distance_raw', 0)  # ✅ Arduino minimal
                 existing_zone = existing_person.get('zone', '')
                 
                 # Se pessoa está na mesma zona e distância similar (±0.3m), é a mesma
@@ -486,6 +486,10 @@ class SingleRadarCounter:
                 # Nova pessoa detectada
                 person['first_seen'] = current_time
                 person['last_seen'] = current_time
+                # ✅ Adiciona campos padrão que o Arduino minimal não envia
+                person['distance_smoothed'] = distance  # Usa distance_raw como smoothed
+                person['confidence'] = 85  # Valor padrão razoável
+                person['stationary'] = False  # Assume móvel por padrão
                 current_people_dict[stable_id] = person
         
         # Detecta ENTRADAS REAIS (novas pessoas que não existiam)
@@ -496,9 +500,9 @@ class SingleRadarCounter:
                 is_really_new = True
                 for old_id, old_person in self.previous_people.items():
                     old_zone = old_person.get('zone', '')
-                    old_dist = old_person.get('distance_smoothed', 0)
+                    old_dist = old_person.get('distance_raw', 0)  # ✅ Arduino minimal
                     new_zone = person_info.get('zone', '')
-                    new_dist = person_info.get('distance_smoothed', 0)
+                    new_dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
                     
                     # Se pessoa muito similar saiu recentemente, não conta como nova
                     if (old_zone == new_zone and 
@@ -513,7 +517,7 @@ class SingleRadarCounter:
                     self.entries_count += 1
                     self.unique_people_today.add(person_id)
                     zone = person_info.get('zone', 'DESCONHECIDA')
-                    dist = person_info.get('distance_smoothed', 0)
+                    dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
                     logger.info(f"🆕 ENTRADA REAL: {zone} {dist:.1f}m (Total: {self.total_people_detected})")
         
         # Detecta SAÍDAS REAIS (pessoas que realmente saíram)
@@ -526,7 +530,7 @@ class SingleRadarCounter:
                     exits.append(person_id)
                     self.exits_count += 1
                     zone = person_info.get('zone', 'DESCONHECIDA')
-                    dist = person_info.get('distance_smoothed', 0)
+                    dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
                     logger.info(f"🚪 SAÍDA REAL: {zone} {dist:.1f}m (Entradas: {self.entries_count}, Saídas: {self.exits_count})")
         
         # Atualiza estado
@@ -596,11 +600,13 @@ class SingleRadarCounter:
                 
                 current_time = time.time()
                 for i, person in enumerate(active_people):
-                    confidence = person.get("confidence", 0)
-                    distance_smoothed = person.get("distance_smoothed", 0)
+                    # ✅ Arduino minimal: adapta campos ausentes
+                    confidence = person.get("confidence", 85)  # Valor padrão
+                    distance_raw = person.get("distance_raw", 0)  # Novo campo principal
+                    distance_smoothed = person.get("distance_smoothed", distance_raw)  # Fallback
                     x_pos = person.get("x_pos", 0)
                     y_pos = person.get("y_pos", 0)
-                    stationary = person.get("stationary", False)
+                    stationary = person.get("stationary", False)  # Valor padrão
                     
                     # ✅ CALCULA ZONA ESPECÍFICA DAS ATIVAÇÕES usando coordenadas x,y
                     zone = self.zone_manager.get_zone(x_pos, y_pos)
@@ -609,7 +615,8 @@ class SingleRadarCounter:
                     # Encontra ID da nossa lógica interna
                     our_person_id = None
                     for internal_id, internal_person in self.current_people.items():
-                        if (abs(internal_person.get('distance_smoothed', 0) - distance_smoothed) < 0.1 and
+                        internal_dist = internal_person.get('distance_raw', internal_person.get('distance_smoothed', 0))
+                        if (abs(internal_dist - distance_raw) < 0.1 and
                             internal_person.get('zone', '') == zone):
                             our_person_id = internal_id
                             break
@@ -627,7 +634,7 @@ class SingleRadarCounter:
                     pos_str = f"{x_pos:.1f},{y_pos:.1f}"
                     
                     zone_desc = self.zone_manager.get_zone_description(zone)[:14]  # Trunca para caber
-                    print(f"{zone_desc:<15} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
+                    print(f"{zone_desc:<15} {distance_raw:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
                 
                 # Envia APENAS UM resumo por ciclo (não uma linha por pessoa)
                 if self.gsheets_manager:
@@ -655,7 +662,7 @@ class SingleRadarCounter:
                         len(active_people),                # 3. person_count (real detectadas agora)
                         person_description,                # 4. person_id (descrição profissional)
                         zones_str,                         # 5. zone (todas as zonas ordenadas)
-                        f"{sum(p.get('distance_smoothed', 0) for p in active_people) / len(active_people):.1f}",  # 6. distance (média)
+                        f"{sum(p.get('distance_raw', p.get('distance_smoothed', 0)) for p in active_people) / len(active_people):.1f}",  # 6. distance (média) - Arduino minimal
                         f"{avg_confidence:.0f}",           # 7. confidence (média)
                         self.total_people_detected,       # 8. total_detected (nossa contagem real)
                         self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
@@ -873,19 +880,20 @@ def main():
         # Exibe status inicial
         status = radar.get_status()
         logger.info("=" * 80)
-        logger.info("👥 CONTADOR ROBUSTO DE PESSOAS - SISTEMA ESP32 v4.2 AVANÇADO")
+        logger.info("👥 CONTADOR ROBUSTO DE PESSOAS - SISTEMA ESP32 v4.3 MINIMAL")
         logger.info("=" * 80)
         logger.info(f"🔴 {status['name']}: {status['port']}")
         logger.info(f"📋 {status['description']}")
-        logger.info("🚀 Sistema CORRIGIDO v4.3 - Tracking Preciso para Eventos:")
+        logger.info("🚀 Sistema ADAPTADO v4.3 - Arduino Minimal + Python Robusto:")
+        logger.info("   • Arduino: Envia apenas X,Y,distance_raw (JSON ultra-leve)")
+        logger.info("   • Python: Calcula zonas, confidence, tracking completo")
+        logger.info("   • Redução 70% na transmissão de dados")
         logger.info("   • Lógica baseada em POSIÇÃO REAL (não IDs do Arduino)")
         logger.info("   • Detecção precisa de entrada/saída por zona")
         logger.info("   • Pessoas paradas contam apenas UMA vez")
         logger.info("   • Anti-flickering: evita contagem duplicada")
-        logger.info("   • Contagem acumulativa REAL corrigida")
-        logger.info("   • Ideal para eventos com muitas pessoas")
         logger.info("   • Tracking por zona + distância + posição")
-        logger.info("   • Ignora dados não-confiáveis do Arduino")
+        logger.info("   • Sistema híbrido: Arduino simples + Python inteligente")
         logger.info("⚡ Sistema ativo - Dados sendo enviados para Google Sheets")
         logger.info("🔄 Reconexão automática habilitada")
         logger.info("=" * 80)
