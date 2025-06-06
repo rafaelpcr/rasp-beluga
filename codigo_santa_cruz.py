@@ -468,7 +468,10 @@ class SingleRadarCounter:
             x_pos = person.get('x_pos', 0)
             y_pos = person.get('y_pos', 0) 
             distance = person.get('distance_smoothed', person.get('distance_raw', 0))
-            zone = person.get('zone', 'DESCONHECIDA')
+            
+            # ✅ CALCULA ZONA ESPECÍFICA DAS ATIVAÇÕES usando coordenadas x,y
+            zone = self.zone_manager.get_zone(x_pos, y_pos)
+            person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
             
             # ID baseado na posição arredondada (estável para pessoa parada)
             stable_id = f"P_{zone}_{distance:.1f}_{i}"
@@ -603,12 +606,15 @@ class SingleRadarCounter:
                 
                 current_time = time.time()
                 for i, person in enumerate(active_people):
-                    zone = person.get("zone", "N/A")
                     confidence = person.get("confidence", 0)
                     distance_smoothed = person.get("distance_smoothed", 0)
                     x_pos = person.get("x_pos", 0)
                     y_pos = person.get("y_pos", 0)
                     stationary = person.get("stationary", False)
+                    
+                    # ✅ CALCULA ZONA ESPECÍFICA DAS ATIVAÇÕES usando coordenadas x,y
+                    zone = self.zone_manager.get_zone(x_pos, y_pos)
+                    person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
                     
                     # Encontra ID da nossa lógica interna
                     our_person_id = None
@@ -637,6 +643,7 @@ class SingleRadarCounter:
                 if self.gsheets_manager:
                     # Calcula dados agregados
                     avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
+                    # ✅ COLETA ZONAS JÁ CORRIGIDAS (calculadas pelo ZoneManager)
                     zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
                     zones_str = ",".join(sorted(zones_detected))
                     
@@ -667,11 +674,11 @@ class SingleRadarCounter:
                 
                 print(f"\n💡 DETECTANDO {len(active_people)} pessoa(s) SIMULTANEAMENTE")
                 
-                # Estatísticas por zona
+                # Estatísticas por zona (usando zonas já corrigidas)
                 zone_stats = {}
                 high_confidence = 0
                 for person in active_people:
-                    zone = person.get("zone", "N/A")
+                    zone = person.get("zone", "N/A")  # Zona já foi corrigida acima
                     zone_stats[zone] = zone_stats.get(zone, 0) + 1
                     if person.get("confidence", 0) >= 70:
                         high_confidence += 1
