@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-"""
-Sistema DUAL RADAR - GRAVATÁ
-Baseado 100% no codigo_sj1.py com sistema robusto de tracking
-Duas áreas (interna + externa) → MESMA PLANILHA
-"""
-
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -247,16 +240,18 @@ class SingleRadarCounter:
         self.reentry_timeout = 10.0
         self.last_update_time = time.time()
         
-        # Controle de escrita no Google Sheets (IGUAL AO SANTA CRUZ)
+        # Controle de escrita no Google Sheets (MAIS CONSERVADOR)
         self.last_sheets_write = 0
-        self.sheets_write_interval = 30.0
+        self.sheets_write_interval = 60.0  # Aumentado para 60 segundos
         self.pending_data = []
-        self.max_pending_lines = 10  # Envia a cada 10 linhas como Santa Cruz
+        self.max_pending_lines = 5   # Reduzido para 5 linhas para evitar spam
+        self.min_interval_between_adds = 10.0  # Mínimo 10s entre adições ao buffer
         
         # Estatísticas detalhadas
         self.entries_count = 0
         self.exits_count = 0
         self.unique_people_today = set()
+        self.last_data_add_time = 0  # Controle temporal para evitar spam
 
     def find_serial_port(self):
         """Detecta automaticamente a porta serial"""
@@ -618,58 +613,73 @@ class SingleRadarCounter:
                     zone_desc = self.zone_manager.get_zone_description(zone)[:19]
                     print(f"{zone_desc:<20} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8}")
                 
-                # Envia dados para planilha (formato específico Gravatá)
+                # Envia dados para planilha (formato específico Gravatá) - COM CONTROLE TEMPORAL
                 if self.gsheets_manager:
-                    avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
-                    zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
-                    zones_str = ",".join(sorted(zones_detected))
+                    current_time = time.time()
                     
-                    if len(active_people) == 1:
-                        person_description = f"Pessoa_{self.area_tipo}"
-                    elif len(active_people) <= 3:
-                        person_description = f"Grupo_Pequeno_{self.area_tipo}"
-                    elif len(active_people) <= 10:
-                        person_description = f"Grupo_Medio_{self.area_tipo}"
+                    # EVITA SPAM: Só adiciona se passou tempo suficiente desde última adição
+                    if (current_time - self.last_data_add_time) >= self.min_interval_between_adds:
+                        avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
+                        zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
+                        zones_str = ",".join(sorted(zones_detected))
+                        
+                        if len(active_people) == 1:
+                            person_description = f"Pessoa_{self.area_tipo}"
+                        elif len(active_people) <= 3:
+                            person_description = f"Grupo_Pequeno_{self.area_tipo}"
+                        elif len(active_people) <= 10:
+                            person_description = f"Grupo_Medio_{self.area_tipo}"
+                        else:
+                            person_description = f"Grupo_Grande_{self.area_tipo}"
+                        
+                        # Formato específico para Gravatá (diferente do Santa Cruz)
+                        row = [
+                            radar_id,                                    # 1. radar_id
+                            formatted_timestamp,                         # 2. timestamp  
+                            self.area_tipo,                             # 3. area_tipo (EXTERNA/INTERNA)
+                            len(active_people),                         # 4. person_count
+                            person_description,                         # 5. person_id
+                            zones_str,                                  # 6. zone
+                            f"{sum(p.get('distance_smoothed', 0) for p in active_people) / len(active_people):.1f}",  # 7. distance
+                            f"{avg_confidence:.0f}",                    # 8. confidence
+                            self.total_people_detected,                 # 9. total_detected
+                            self.max_simultaneous_people,               # 10. max_simultaneous
+                            'ATIVA'                                     # 11. area_status
+                        ]
+                        self.pending_data.append(row)
+                        self.last_data_add_time = current_time
+                        logger.info(f"📊 Dados {self.area_tipo} adicionados ao buffer ({len(self.pending_data)}/5)")
                     else:
-                        person_description = f"Grupo_Grande_{self.area_tipo}"
-                    
-                    # Formato específico para Gravatá (diferente do Santa Cruz)
-                    row = [
-                        radar_id,                                    # 1. radar_id
-                        formatted_timestamp,                         # 2. timestamp  
-                        self.area_tipo,                             # 3. area_tipo (EXTERNA/INTERNA)
-                        len(active_people),                         # 4. person_count
-                        person_description,                         # 5. person_id
-                        zones_str,                                  # 6. zone
-                        f"{sum(p.get('distance_smoothed', 0) for p in active_people) / len(active_people):.1f}",  # 7. distance
-                        f"{avg_confidence:.0f}",                    # 8. confidence
-                        self.total_people_detected,                 # 9. total_detected
-                        self.max_simultaneous_people,               # 10. max_simultaneous
-                        'ATIVA'                                     # 11. area_status
-                    ]
-                    self.pending_data.append(row)
+                        time_remaining = self.min_interval_between_adds - (current_time - self.last_data_add_time)
+                        logger.debug(f"⏳ {self.area_tipo}: Aguardando {time_remaining:.1f}s para próxima adição")
                 
                 print(f"\n💡 ÁREA {self.area_tipo}: {len(active_people)} pessoa(s) ATIVAS")
                 
             else:
                 print(f"\n👻 Área {self.area_tipo} vazia no momento.")
                 
-                # Dados zerados para área vazia
+                # Dados zerados para área vazia - COM CONTROLE TEMPORAL
                 if self.gsheets_manager and len(self.previous_people) > 0:
-                    row = [
-                        radar_id,                           # 1. radar_id
-                        formatted_timestamp,                # 2. timestamp
-                        self.area_tipo,                    # 3. area_tipo
-                        0,                                 # 4. person_count
-                        f"Vazia_{self.area_tipo}",         # 5. person_id
-                        "VAZIA",                           # 6. zone
-                        "0",                               # 7. distance
-                        "0",                               # 8. confidence
-                        self.total_people_detected,        # 9. total_detected
-                        self.max_simultaneous_people,      # 10. max_simultaneous
-                        'VAZIA'                            # 11. area_status
-                    ]
-                    self.pending_data.append(row)
+                    current_time = time.time()
+                    
+                    # EVITA SPAM de status vazio: Só adiciona se passou tempo suficiente
+                    if (current_time - self.last_data_add_time) >= self.min_interval_between_adds:
+                        row = [
+                            radar_id,                           # 1. radar_id
+                            formatted_timestamp,                # 2. timestamp
+                            self.area_tipo,                    # 3. area_tipo
+                            0,                                 # 4. person_count
+                            f"Vazia_{self.area_tipo}",         # 5. person_id
+                            "VAZIA",                           # 6. zone
+                            "0",                               # 7. distance
+                            "0",                               # 8. confidence
+                            self.total_people_detected,        # 9. total_detected
+                            self.max_simultaneous_people,      # 10. max_simultaneous
+                            'VAZIA'                            # 11. area_status
+                        ]
+                        self.pending_data.append(row)
+                        self.last_data_add_time = current_time
+                        logger.info(f"📊 Status VAZIA {self.area_tipo} adicionado ao buffer")
             
             print("=" * 60)
             
@@ -684,7 +694,7 @@ class SingleRadarCounter:
         try:
             current_time = time.time()
             
-            # Verifica se já passou tempo suficiente desde último envio OU se tem 10+ linhas
+            # Verifica se já passou tempo suficiente desde último envio OU se tem 5+ linhas
             time_to_send = (current_time - self.last_sheets_write) >= self.sheets_write_interval
             buffer_full = len(self.pending_data) >= self.max_pending_lines
             
@@ -695,17 +705,17 @@ class SingleRadarCounter:
             if not self.pending_data or not self.gsheets_manager:
                 return
             
-            # Pega apenas os dados mais recentes (máximo 10 linhas por vez)
+            # Pega apenas os dados mais recentes (máximo 5 linhas por vez)
             data_to_send = self.pending_data[-self.max_pending_lines:] if len(self.pending_data) > self.max_pending_lines else self.pending_data
             
             # Envia em lote (mais eficiente)
             if data_to_send:
                 logger.info(f"📊 Enviando {len(data_to_send)} linhas {self.area_tipo} para planilha...")
                 
-                # Envia todas as linhas de uma vez (batch)
+                # Envia todas as linhas de uma vez (batch) - COM PAUSA MAIOR
                 for row in data_to_send:
                     self.gsheets_manager.worksheet.append_row(row)
-                    time.sleep(0.5)  # Pequena pausa entre linhas
+                    time.sleep(2.0)  # Pausa de 2 segundos entre linhas para evitar sobrecarga
                 
                 logger.info(f"✅ {len(data_to_send)} linhas {self.area_tipo} enviadas!")
                 
