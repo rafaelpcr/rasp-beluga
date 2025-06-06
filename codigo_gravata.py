@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+"""
+Sistema DUAL RADAR - GRAVATÁ
+Baseado 100% no codigo_sj1.py com sistema robusto de tracking
+Duas áreas (interna + externa) → MESMA PLANILHA
+"""
+
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -5,27 +12,22 @@ import logging
 import os
 import traceback
 import time
-import numpy as np
-import uuid
+import json
 import serial
 import threading
-import re
-import math
-from dotenv import load_dotenv
 import serial.tools.list_ports
-from collections import defaultdict
-import json
+from dotenv import load_dotenv
 
 # Configuração básica de logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('dual_radar_counter.log'),
+        logging.FileHandler('gravata_dual_radar.log'),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger('dual_radar_counter_app')
+logger = logging.getLogger('gravata_dual_radar')
 
 # Configurando o nível de log para outros módulos
 logging.getLogger('urllib3').setLevel(logging.WARNING)
@@ -33,34 +35,35 @@ logging.getLogger('gspread').setLevel(logging.WARNING)
 
 load_dotenv()
 
-# Configurações dos radares com suas planilhas específicas
+# ✅ CONFIGURAÇÃO DOS DOIS RADARES PARA GRAVATÁ (BASEADO NO codigo_sj1.py)
 RADAR_CONFIGS = [
     {
-        'id': 'RADAR_1',
-        'name': 'Contador Entrada Estande',
-        'port': '/dev/ttyACM0',  # Será detectado automaticamente
+        'id': 'RADAR_GRAVATA_EXTERNO',
+        'name': 'Contador Gravatá Externo',
+        'port': '/dev/ttyACM0',
         'baudrate': 115200,
-        'spreadsheet_id': '1zVVyL6D9XSrzFvtDxaGJ-3CdniD-gG3Q-bUUXyqr3D4',  # Planilha entrada estande
-        'spreadsheet_name': 'contador_entrada_estande',
+        'spreadsheet_id': '1ACu8Qmicxv7Av-1nAK_dIDbcD_RJBizk2iXspixK2Gg',
         'color': '🔴',
-        'description': 'Conta pessoas entrando no estande'
+        'area_tipo': 'EXTERNA',
+        'description': 'Gravatá Externa: multi-pessoa simultânea, 8.3Hz, até 8 pessoas'
     },
     {
-        'id': 'RADAR_2', 
-        'name': 'Contador Interno Estande',
-        'port': '/dev/ttyACM1',  # Será detectado automaticamente
+        'id': 'RADAR_GRAVATA_INTERNO',
+        'name': 'Contador Gravatá Interno',
+        'port': '/dev/ttyACM1', 
         'baudrate': 115200,
-        'spreadsheet_id': '1ACu8Qmicxv7Av-1nAK_dIDbcD_RJBizk2iXspixK2Gg',  # Planilha interno estande
-        'spreadsheet_name': 'contador_interno_estande',
+        'spreadsheet_id': '1ACu8Qmicxv7Av-1nAK_dIDbcD_RJBizk2iXspixK2Gg',
         'color': '🔵',
-        'description': 'Conta pessoas no interior do estande'
+        'area_tipo': 'INTERNA',
+        'description': 'Gravatá Interna: multi-pessoa simultânea, 8.3Hz, até 8 pessoas'
     }
 ]
 
-RANGE_STEP = 2.5
+# Configurações gerais
+CREDENTIALS_FILE = 'serial_radar/credenciais.json'
 
-class GoogleSheetsCounterManager:
-    def __init__(self, creds_path, spreadsheet_id, radar_id, worksheet_name='Sheet1'):
+class GoogleSheetsManager:
+    def __init__(self, creds_path, spreadsheet_id, radar_id):
         SCOPES = [
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/drive',
@@ -72,459 +75,263 @@ class GoogleSheetsCounterManager:
         self.gc = gspread.authorize(self.creds)
         
         try:
-            # Abre a planilha pelo ID específico
             self.spreadsheet = self.gc.open_by_key(spreadsheet_id)
-            logger.info(f"✅ Planilha conectada para {radar_id}: {self.spreadsheet.title}")
+            logger.info(f"✅ Planilha Gravatá conectada: {self.spreadsheet.title}")
         except Exception as e:
-            logger.error(f"❌ Erro ao conectar à planilha {spreadsheet_id} para {radar_id}: {e}")
+            logger.error(f"❌ Erro ao conectar à planilha: {e}")
             raise
             
-        # Seleciona a primeira worksheet disponível
         try:
-            self.worksheet = self.spreadsheet.get_worksheet(0)  # Primeira aba
+            self.worksheet = self.spreadsheet.get_worksheet(0)
             logger.info(f"✅ Worksheet selecionada: {self.worksheet.title}")
         except Exception as e:
-            logger.error(f"❌ Erro ao selecionar worksheet para {radar_id}: {e}")
+            logger.error(f"❌ Erro ao selecionar worksheet: {e}")
             raise
         
-        # Verifica e configura cabeçalhos para contagem de pessoas
-        self._setup_counter_headers()
+        self._setup_headers()
 
-    def _setup_counter_headers(self):
-        """Configura cabeçalhos para contagem de pessoas"""
+    def _setup_headers(self):
+        """Configura cabeçalhos específicos para Gravatá Dual (diferente do Santa Cruz)"""
         try:
             headers = self.worksheet.row_values(1)
+            # Campos específicos para GRAVATÁ DUAL - mostra dados de cada área
             expected_headers = [
-                'timestamp', 'session_id', 'event_type', 'current_count',
-                'total_entries', 'total_exits', 'max_simultaneous',
-                'person_id', 'x_position', 'y_position', 'distance', 'zone',
-                'duration_in_area', 'speed', 'confidence_level', 'radar_id'
+                'radar_id',           # ID do radar (EXTERNO/INTERNO)
+                'timestamp',          # Data/hora
+                'area_tipo',          # EXTERNA ou INTERNA
+                'person_count',       # Pessoas simultâneas nesta área
+                'person_id',          # ID da pessoa/grupo
+                'zone',               # Zona específica da área
+                'distance',           # Distância (metros)
+                'confidence',         # Confiança da detecção (%)
+                'total_detected',     # Total acumulativo desta área
+                'max_simultaneous',   # Máximo simultâneo desta área
+                'area_status'         # Status da área (ATIVA/VAZIA)
             ]
             
-            if not headers or len(headers) < 10:
-                logger.info(f"🔧 Configurando cabeçalhos de contagem para {self.radar_id}")
+            if not headers or len(headers) < 11:
+                logger.info("🔧 Configurando cabeçalhos Gravatá Dual (11 campos específicos)")
                 self.worksheet.clear()
                 self.worksheet.append_row(expected_headers)
             else:
-                logger.info(f"✅ Cabeçalhos verificados para {self.radar_id}")
-                # Adiciona radar_id se não existir
-                if 'radar_id' not in headers:
-                    next_col = len(headers) + 1
-                    self.worksheet.update_cell(1, next_col, 'radar_id')
+                logger.info("✅ Cabeçalhos Gravatá Dual verificados")
                     
         except Exception as e:
-            logger.warning(f"⚠️ Erro ao configurar cabeçalhos para {self.radar_id}: {e}")
-
-    def insert_counter_data(self, data):
-        try:
-            row = [
-                data.get('timestamp'),
-                data.get('session_id'),
-                data.get('event_type'),
-                data.get('current_count'),
-                data.get('total_entries'),
-                data.get('total_exits'),
-                data.get('max_simultaneous'),
-                data.get('person_id'),
-                data.get('x_position'),
-                data.get('y_position'),
-                data.get('distance'),
-                data.get('zone'),
-                data.get('duration_in_area'),
-                data.get('speed'),
-                data.get('confidence_level'),
-                data.get('radar_id', self.radar_id)
-            ]
-            
-            self.worksheet.append_row(row)
-            logger.debug(f'✅ Dados de contagem do {self.radar_id} enviados para Google Sheets!')
-            return True
-        except Exception as e:
-            logger.error(f'❌ Erro ao enviar dados de contagem do {self.radar_id}: {str(e)}')
-            logger.error(traceback.format_exc())
-            return False
-
-    def insert_summary_data(self, summary_data):
-        """Inserir dados de resumo do contador"""
-        try:
-            # Verificar se existe planilha de resumo
-            try:
-                summary_worksheet = self.spreadsheet.worksheet('CounterSummary')
-            except:
-                summary_worksheet = self.spreadsheet.add_worksheet(title='CounterSummary', rows=100, cols=10)
-                headers = ['date', 'session_duration', 'total_people', 'max_simultaneous', 
-                          'avg_dwell_time', 'peak_hours', 'busiest_zone', 'radar_id']
-                summary_worksheet.append_row(headers)
-            
-            row = [
-                summary_data.get('date'),
-                summary_data.get('session_duration'),
-                summary_data.get('total_people'),
-                summary_data.get('max_simultaneous'),
-                summary_data.get('avg_dwell_time'),
-                summary_data.get('peak_hours'),
-                summary_data.get('busiest_zone'),
-                summary_data.get('radar_id', self.radar_id)
-            ]
-            summary_worksheet.append_row(row)
-            logger.info(f'✅ Resumo do contador {self.radar_id} enviado para Google Sheets!')
-            return True
-        except Exception as e:
-            logger.error(f'❌ Erro ao enviar resumo do {self.radar_id}: {str(e)}')
-            return False
-
-def parse_serial_data(raw_data):
-    """Função para parsear dados seriais do radar"""
-    try:
-        x_pattern = r'x_point\s*:\s*([-+]?\d*\.?\d+)'
-        y_pattern = r'y_point\s*:\s*([-+]?\d*\.?\d+)'
-        dop_pattern = r'dop_index\s*:\s*([-+]?\d+)'
-        cluster_pattern = r'cluster_index\s*:\s*(\d+)'
-        speed_pattern = r'move_speed\s*:\s*([-+]?\d*\.?\d+)\s*cm/s'
-        distance_pattern = r'distance\s*:\s*([-+]?\d*\.?\d+)'
-
-        if '-----Human Detected-----' not in raw_data:
-            return None
-        if 'Target 1:' not in raw_data:
-            return None
-
-        x_match = re.search(x_pattern, raw_data, re.IGNORECASE)
-        y_match = re.search(y_pattern, raw_data, re.IGNORECASE)
-        dop_match = re.search(dop_pattern, raw_data, re.IGNORECASE)
-        cluster_match = re.search(cluster_pattern, raw_data, re.IGNORECASE)
-        speed_match = re.search(speed_pattern, raw_data, re.IGNORECASE)
-        distance_match = re.search(distance_pattern, raw_data, re.IGNORECASE)
-
-        if x_match and y_match:
-            data = {
-                'x_point': float(x_match.group(1)),
-                'y_point': float(y_match.group(1)),
-                'dop_index': int(dop_match.group(1)) if dop_match else 0,
-                'cluster_index': int(cluster_match.group(1)) if cluster_match else 0,
-                'move_speed': float(speed_match.group(1))/100 if speed_match else 0.0,
-                'distance': float(distance_match.group(1)) if distance_match else None
-            }
-
-            if data['distance'] is None:
-                data['distance'] = math.sqrt(data['x_point']**2 + data['y_point']**2)
-            
-            return data
-        else:
-            return None
-    except Exception as e:
-        logger.error(f"❌ Erro ao analisar dados seriais: {str(e)}")
-        return None
-
-class TrackedPerson:
-    def __init__(self, person_id, x, y, radar_id):
-        self.person_id = person_id
-        self.radar_id = radar_id
-        self.x = x
-        self.y = y
-        self.entry_time = time.time()
-        self.last_seen = time.time()
-        self.positions = [(x, y, time.time())]
-        self.zone_history = []
-        self.is_active = True
-        self.confidence = 1.0
-        
-    def update_position(self, x, y):
-        self.x = x
-        self.y = y
-        self.last_seen = time.time()
-        self.positions.append((x, y, time.time()))
-        
-        # Manter apenas as últimas 50 posições
-        if len(self.positions) > 50:
-            self.positions.pop(0)
-    
-    def get_duration_in_area(self):
-        return self.last_seen - self.entry_time
-    
-    def get_average_speed(self):
-        if len(self.positions) < 2:
-            return 0.0
-        
-        speeds = []
-        for i in range(1, len(self.positions)):
-            prev_x, prev_y, prev_t = self.positions[i-1]
-            curr_x, curr_y, curr_t = self.positions[i]
-            
-            distance = math.sqrt((curr_x - prev_x)**2 + (curr_y - prev_y)**2)
-            time_diff = curr_t - prev_t
-            
-            if time_diff > 0:
-                speed = distance / time_diff  # m/s
-                speeds.append(speed)
-        
-        return np.mean(speeds) if speeds else 0.0
+            logger.warning(f"⚠️ Erro ao configurar cabeçalhos: {e}")
 
 class ZoneManager:
-    def __init__(self, radar_id):
-        self.radar_id = radar_id
+    def __init__(self, area_tipo):
+        self.area_tipo = area_tipo
         
-        # Zonas específicas por radar
-        if radar_id == 'RADAR_1':  # Entrada
-            self.INTEREST_ZONE_DISTANCE = 2.0  # Zona de entrada menor
-            self.zones = {
-                'ENTRADA': 'Zona de entrada principal',
-                'PASSAGEM': 'Zona de passagem'
+        # Configuração baseada no tipo de área
+        if area_tipo == 'EXTERNA':
+            # Zonas para área externa de Gravatá
+            self.ZONA_CONFIGS = {
+                'ENTRADA_EXTERNA': {
+                    'x_min': -2.0, 'x_max': 2.0,
+                    'y_min': 0.0, 'y_max': 2.0,
+                    'distance_range': (0.5, 2.5)
+                },
+                'CENTRO_EXTERNA': {
+                    'x_min': -3.0, 'x_max': 3.0,
+                    'y_min': 2.0, 'y_max': 5.0,
+                    'distance_range': (2.0, 5.5)
+                },
+                'FUNDO_EXTERNA': {
+                    'x_min': -2.5, 'x_max': 2.5,
+                    'y_min': 5.0, 'y_max': 8.0,
+                    'distance_range': (5.0, 8.5)
+                }
             }
-        else:  # RADAR_2 - Interno
-            self.INTEREST_ZONE_DISTANCE = 3.0  # Zona interna maior
-            self.zones = {
-                'INTERESSE': 'Zona de interesse interno',
-                'CIRCULACAO': 'Zona de circulação'
+        else:  # INTERNA
+            # Zonas para área interna de Gravatá
+            self.ZONA_CONFIGS = {
+                'ENTRADA_INTERNA': {
+                    'x_min': -1.5, 'x_max': 1.5,
+                    'y_min': 0.0, 'y_max': 1.5,
+                    'distance_range': (0.3, 2.0)
+                },
+                'CENTRO_INTERNA': {
+                    'x_min': -2.0, 'x_max': 2.0,
+                    'y_min': 1.5, 'y_max': 4.0,
+                    'distance_range': (1.5, 4.5)
+                },
+                'FUNDO_INTERNA': {
+                    'x_min': -1.8, 'x_max': 1.8,
+                    'y_min': 4.0, 'y_max': 6.0,
+                    'distance_range': (4.0, 6.5)
+                }
             }
-    
+        
     def get_zone(self, x, y):
-        """Determinar zona baseada na distância do radar"""
-        distance = math.sqrt(x**2 + y**2)
+        """Determinar zona baseada na posição e tipo de área"""
+        distance = self.get_distance(x, y)
         
-        if self.radar_id == 'RADAR_1':
-            if distance <= self.INTEREST_ZONE_DISTANCE:
-                return 'ENTRADA'
-            else:
-                return 'PASSAGEM'
-        else:  # RADAR_2
-            if distance <= self.INTEREST_ZONE_DISTANCE:
-                return 'INTERESSE'
-            else:
-                return 'CIRCULACAO'
+        # Verifica cada zona baseada na posição X,Y e distância
+        for zona_name, config in self.ZONA_CONFIGS.items():
+            if (config['x_min'] <= x <= config['x_max'] and
+                config['y_min'] <= y <= config['y_max'] and
+                config['distance_range'][0] <= distance <= config['distance_range'][1]):
+                return zona_name
+        
+        # Zonas de fallback baseadas na distância e área
+        if distance <= 1.5:
+            return f'ENTRADA_{self.area_tipo}'
+        elif distance <= 4.0:
+            return f'CENTRO_{self.area_tipo}'
+        elif distance <= 7.0:
+            return f'FUNDO_{self.area_tipo}'
+        else:
+            return f'FORA_{self.area_tipo}'
     
     def get_distance(self, x, y):
         """Calcular distância do radar"""
+        import math
         return math.sqrt(x**2 + y**2)
-
-class PeopleCounterManager:
-    def __init__(self, radar_id):
-        self.radar_id = radar_id
-        self.tracked_people = {}
-        self.people_counter = 0
-        self.total_entries = 0
-        self.total_exits = 0
-        self.max_simultaneous = 0
-        self.session_start_time = time.time()
-        self.session_id = str(uuid.uuid4())[:8]
-        self.zone_manager = ZoneManager(radar_id)
-        
-        # Parâmetros de rastreamento
-        self.POSITION_THRESHOLD = 0.8  # metros
-        self.TIMEOUT_THRESHOLD = 5.0   # segundos
-        self.MIN_CONFIDENCE = 0.5
-        
-        # Estatísticas por zona
-        self.zone_stats = defaultdict(int)
-        self.hourly_stats = defaultdict(int)
-
-    def find_matching_person(self, x, y):
-        """Encontrar pessoa existente baseada na proximidade"""
-        best_match = None
-        min_distance = self.POSITION_THRESHOLD
-        
-        for person_id, person in self.tracked_people.items():
-            if not person.is_active:
-                continue
-                
-            distance = math.sqrt((person.x - x)**2 + (person.y - y)**2)
-            if distance < min_distance:
-                min_distance = distance
-                best_match = person_id
-        
-        return best_match
-
-    def add_or_update_person(self, x, y):
-        """Adicionar nova pessoa ou atualizar existente"""
-        existing_id = self.find_matching_person(x, y)
-        
-        if existing_id:
-            # Atualizar pessoa existente
-            person = self.tracked_people[existing_id]
-            person.update_position(x, y)
-            person.confidence = min(1.0, person.confidence + 0.1)
-            return existing_id
-        else:
-            # Criar nova pessoa
-            person_id = f"{self.radar_id}_person_{len(self.tracked_people)}_{int(time.time())}"
-            self.tracked_people[person_id] = TrackedPerson(person_id, x, y, self.radar_id)
-            return person_id
-
-    def cleanup_inactive_people(self):
-        """Remover pessoas que não foram vistas recentemente"""
-        current_time = time.time()
-        to_remove = []
-        
-        for person_id, person in self.tracked_people.items():
-            if current_time - person.last_seen > self.TIMEOUT_THRESHOLD:
-                if person.is_active:
-                    person.is_active = False
-                    logger.debug(f"{self.radar_id}: Pessoa {person_id} marcada como inativa")
-                
-                # Remover após mais tempo para manter histórico
-                if current_time - person.last_seen > self.TIMEOUT_THRESHOLD * 2:
-                    to_remove.append(person_id)
-        
-        for person_id in to_remove:
-            duration = self.tracked_people[person_id].get_duration_in_area()
-            logger.debug(f"{self.radar_id}: Removendo pessoa {person_id} (duração: {duration:.1f}s)")
-            del self.tracked_people[person_id]
-
-    def get_current_count(self):
-        """Contar pessoas ativas atualmente"""
-        return sum(1 for person in self.tracked_people.values() if person.is_active)
-
-    def check_entry_exit(self, person_id):
-        """Verificar se houve entrada ou saída da zona de interesse"""
-        person = self.tracked_people[person_id]
-        current_zone = self.zone_manager.get_zone(person.x, person.y)
-        current_distance = self.zone_manager.get_distance(person.x, person.y)
-        
-        # Verificar mudança de zona
-        if person.zone_history:
-            last_zone = person.zone_history[-1]
-            if current_zone != last_zone:
-                if self.radar_id == 'RADAR_1':  # Entrada
-                    if last_zone == 'PASSAGEM' and current_zone == 'ENTRADA':
-                        self.total_entries += 1
-                        logger.info(f"🎯 {self.radar_id}: ENTRADA detectada - Pessoa {person_id} (distância: {current_distance:.2f}m)")
-                        return 'ENTRY_ENTRANCE'
-                    elif last_zone == 'ENTRADA' and current_zone == 'PASSAGEM':
-                        self.total_exits += 1
-                        logger.info(f"🚶 {self.radar_id}: SAÍDA detectada - Pessoa {person_id} (distância: {current_distance:.2f}m)")
-                        return 'EXIT_ENTRANCE'
-                else:  # RADAR_2 - Interno
-                    if last_zone == 'CIRCULACAO' and current_zone == 'INTERESSE':
-                        self.total_entries += 1
-                        logger.info(f"🎯 {self.radar_id}: ENTRADA na zona de INTERESSE - Pessoa {person_id} (distância: {current_distance:.2f}m)")
-                        return 'ENTRY_INTEREST'
-                    elif last_zone == 'INTERESSE' and current_zone == 'CIRCULACAO':
-                        self.total_exits += 1
-                        logger.info(f"🚶 {self.radar_id}: SAÍDA da zona de INTERESSE - Pessoa {person_id} (distância: {current_distance:.2f}m)")
-                        return 'EXIT_INTEREST'
-        
-        person.zone_history.append(current_zone)
-        
-        # Manter apenas as últimas 10 zonas
-        if len(person.zone_history) > 10:
-            person.zone_history.pop(0)
-        
-        return None
-
-    def update_statistics(self):
-        """Atualizar estatísticas gerais"""
-        current_count = self.get_current_count()
-        
-        if current_count > self.max_simultaneous:
-            self.max_simultaneous = current_count
-        
-        # Atualizar estatísticas por hora
-        current_hour = datetime.now().hour
-        self.hourly_stats[current_hour] = current_count
-        
-        # Atualizar estatísticas por zona
-        for person in self.tracked_people.values():
-            if person.is_active:
-                zone = self.zone_manager.get_zone(person.x, person.y)
-                self.zone_stats[zone] += 1
-
-    def get_summary_statistics(self):
-        """Obter estatísticas resumidas"""
-        session_duration = time.time() - self.session_start_time
-        total_people = len(self.tracked_people)
-        
-        avg_dwell_time = 0
-        if self.tracked_people:
-            durations = [p.get_duration_in_area() for p in self.tracked_people.values()]
-            avg_dwell_time = np.mean(durations)
-        
-        busiest_zone = max(self.zone_stats, key=self.zone_stats.get) if self.zone_stats else 'NONE'
-        peak_hour = max(self.hourly_stats, key=self.hourly_stats.get) if self.hourly_stats else 0
-        
-        return {
-            'date': datetime.now().strftime('%Y-%m-%d'),
-            'session_duration': round(session_duration, 2),
-            'total_people': total_people,
-            'max_simultaneous': self.max_simultaneous,
-            'avg_dwell_time': round(avg_dwell_time, 2),
-            'peak_hours': f"{peak_hour}:00",
-            'busiest_zone': busiest_zone,
-            'radar_id': self.radar_id
+    
+    def get_zone_description(self, zone_name):
+        """Retorna descrição amigável da zona"""
+        descriptions = {
+            'ENTRADA_EXTERNA': 'Entrada Externa',
+            'CENTRO_EXTERNA': 'Centro Externa', 
+            'FUNDO_EXTERNA': 'Fundo Externa',
+            'ENTRADA_INTERNA': 'Entrada Interna',
+            'CENTRO_INTERNA': 'Centro Interna',
+            'FUNDO_INTERNA': 'Fundo Interna',
+            'FORA_EXTERNA': 'Fora da Área Externa',
+            'FORA_INTERNA': 'Fora da Área Interna'
         }
+        return descriptions.get(zone_name, zone_name)
 
-class RadarCounterManager:
-    def __init__(self, radar_config):
-        self.config = radar_config
-        self.radar_id = radar_config['id']
-        self.radar_name = radar_config['name']
-        self.port = radar_config['port']
-        self.baudrate = radar_config['baudrate']
-        self.color = radar_config['color']
-        self.description = radar_config['description']
+class SingleRadarCounter:
+    def __init__(self, config):
+        self.config = config
+        self.radar_id = config['id']
+        self.radar_name = config['name']
+        self.area_tipo = config['area_tipo']
+        self.port = config['port']
+        self.baudrate = config['baudrate']
+        self.color = config['color']
+        self.description = config['description']
         
         self.serial_connection = None
         self.is_running = False
         self.receive_thread = None
         self.gsheets_manager = None
-        self.people_counter = PeopleCounterManager(self.radar_id)
+        self.zone_manager = ZoneManager(self.area_tipo)
         
-        # Controle de output
-        self.last_output_time = time.time()
-        self.OUTPUT_INTERVAL = 10  # 10 segundos entre outputs
-        self.last_person_count = 0  # Novo: armazena o último person_count recebido
+        # Sistema robusto de contagem de pessoas (igual ao codigo_sj1)
+        self.current_people = {}
+        self.previous_people = {}
+        self.people_history = {}
+        self.total_people_detected = 0
+        self.max_simultaneous_people = 0
+        self.session_start_time = datetime.now()
+        
+        # Configurações de tracking
+        self.exit_timeout = 3.0
+        self.reentry_timeout = 10.0
+        self.last_update_time = time.time()
+        
+        # Controle de escrita no Google Sheets (ANTI-QUOTA EXCEEDED)
+        self.last_sheets_write = 0
+        self.sheets_write_interval = 30.0
+        self.pending_data = []
+        
+        # Estatísticas detalhadas
+        self.entries_count = 0
+        self.exits_count = 0
+        self.unique_people_today = set()
 
     def find_serial_port(self):
-        """Detecta automaticamente a porta serial se a configurada não existir"""
+        """Detecta automaticamente a porta serial"""
         ports = list(serial.tools.list_ports.comports())
         if not ports:
-            logger.error(f"{self.color} {self.radar_name}: Nenhuma porta serial encontrada!")
+            logger.error("Nenhuma porta serial encontrada!")
             return None
+        
+        logger.info(f"🔍 Portas seriais disponíveis:")
+        for port in ports:
+            logger.info(f"   📡 {port.device} - {port.description}")
         
         # Primeiro tenta a porta configurada
         for port in ports:
             if port.device == self.port:
+                logger.info(f"✅ Porta configurada encontrada: {self.port}")
                 return self.port
         
         # Se não encontrou, procura por dispositivos apropriados
         for port in ports:
             desc_lower = port.description.lower()
             if any(term in desc_lower for term in
-                  ['usb', 'serial', 'uart', 'cp210', 'ch340', 'ft232', 'arduino', 'esp32', 'jtag']):
-                logger.warning(f"{self.color} {self.radar_name}: Porta {self.port} não encontrada, usando {port.device}")
+                  ['usb', 'serial', 'uart', 'cp210', 'ch340', 'ft232', 'arduino', 'esp32', 'jtag', 'modem']):
+                logger.warning(f"Porta {self.port} não encontrada, tentando usar {port.device}")
                 return port.device
         
-        logger.error(f"{self.color} {self.radar_name}: Nenhuma porta adequada encontrada!")
+        logger.error("Nenhuma porta adequada encontrada!")
         return None
 
     def connect(self):
-        """Conecta à porta serial"""
-        if not os.path.exists(self.port):
-            detected_port = self.find_serial_port()
-            if detected_port:
-                self.port = detected_port
-            else:
-                return False
+        """Conecta à porta serial com reconexão automática"""
+        max_attempts = 3
         
-        try:
-            logger.info(f"{self.color} {self.radar_name}: Conectando à porta {self.port} (baudrate: {self.baudrate})...")
+        for attempt in range(max_attempts):
+            try:
+                # Verifica se a porta ainda existe
+                if not os.path.exists(self.port):
+                    logger.warning(f"{self.color} Porta {self.port} não existe mais, detectando nova porta...")
+                    detected_port = self.find_serial_port()
+                    if detected_port:
+                        self.port = detected_port
+                    else:
+                        logger.error(f"{self.color} Tentativa {attempt + 1}/{max_attempts}: Nenhuma porta encontrada")
+                        time.sleep(2)
+                        continue
+                
+                # Fecha conexão anterior se existir
+                if hasattr(self, 'serial_connection') and self.serial_connection:
+                    try:
+                        self.serial_connection.close()
+                    except:
+                        pass
+                
+                logger.info(f"{self.color} Tentativa {attempt + 1}/{max_attempts}: Conectando à porta {self.port}...")
+                
+                self.serial_connection = serial.Serial(
+                    port=self.port,
+                    baudrate=self.baudrate,
+                    timeout=2,
+                    write_timeout=2,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE
+                )
+                
+                # Aguarda estabilização
+                time.sleep(3)
+                
+                # Testa a conexão
+                if self.serial_connection.is_open:
+                    logger.info(f"{self.color} ✅ Conexão estabelecida com sucesso!")
+                    return True
+                else:
+                    logger.warning(f"{self.color} ⚠️ Porta aberta mas não está responsiva")
+                    
+            except serial.SerialException as e:
+                logger.error(f"{self.color} ❌ Erro serial na tentativa {attempt + 1}: {str(e)}")
+            except Exception as e:
+                logger.error(f"{self.color} ❌ Erro geral na tentativa {attempt + 1}: {str(e)}")
             
-            self.serial_connection = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                timeout=1,
-                write_timeout=1,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE
-            )
-            time.sleep(2)
-            logger.info(f"{self.color} {self.radar_name}: ✅ Conexão estabelecida!")
-            return True
-        except Exception as e:
-            logger.error(f"{self.color} {self.radar_name}: ❌ Erro ao conectar: {str(e)}")
-            return False
+            if attempt < max_attempts - 1:
+                wait_time = (attempt + 1) * 2
+                logger.info(f"{self.color} ⏳ Aguardando {wait_time}s antes da próxima tentativa...")
+                time.sleep(wait_time)
+        
+        logger.error(f"{self.color} ❌ Falha ao conectar após {max_attempts} tentativas")
+        return False
 
     def start(self, gsheets_manager):
-        """Inicia o radar em uma thread separada"""
+        """Inicia o radar"""
         self.gsheets_manager = gsheets_manager
         
         if not self.connect():
@@ -534,17 +341,12 @@ class RadarCounterManager:
         self.receive_thread = threading.Thread(target=self.receive_data_loop, daemon=True)
         self.receive_thread.start()
         
-        logger.info(f"{self.color} {self.radar_name}: 🚀 Iniciado com sucesso!")
+        logger.info(f"{self.color} 🚀 Radar {self.area_tipo} iniciado com sucesso!")
         return True
 
     def stop(self):
         """Para o radar"""
         self.is_running = False
-        
-        # Enviar resumo final
-        if self.gsheets_manager:
-            summary = self.people_counter.get_summary_statistics()
-            self.gsheets_manager.insert_summary_data(summary)
         
         if self.serial_connection:
             try:
@@ -555,318 +357,573 @@ class RadarCounterManager:
         if self.receive_thread and self.receive_thread.is_alive():
             self.receive_thread.join(timeout=2)
         
-        logger.info(f"{self.color} {self.radar_name}: 🛑 Parado!")
+        logger.info(f"{self.color} 🛑 Radar {self.area_tipo} parado!")
 
     def receive_data_loop(self):
-        """Loop principal de recebimento de dados"""
+        """Loop principal de recebimento de dados com reconexão robusta"""
         import sys
         import os
         buffer = ""
-        logger.info(f"{self.color} {self.radar_name}: 🔄 Loop de dados iniciado...")
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
+        logger.info(f"{self.color} 🔄 Loop de dados {self.area_tipo} iniciado...")
+        
         while self.is_running:
             try:
-                if not self.serial_connection.is_open:
-                    logger.warning(f"{self.color} {self.radar_name}: ⚠️ Reconectando...")
-                    self.connect()
-                    time.sleep(1)
-                    continue
+                # Verifica se a conexão está ativa
+                if not self.serial_connection or not self.serial_connection.is_open:
+                    logger.warning(f"{self.color} ⚠️ Conexão perdida, tentando reconectar...")
+                    if self.connect():
+                        consecutive_errors = 0
+                        buffer = ""
+                        continue
+                    else:
+                        consecutive_errors += 1
+                        time.sleep(5)
+                        continue
+                
+                # Tenta ler dados
                 in_waiting = self.serial_connection.in_waiting or 0
                 data = self.serial_connection.read(in_waiting or 1)
+                
                 if data:
+                    consecutive_errors = 0
                     text = data.decode('utf-8', errors='ignore')
                     buffer += text
+                    
                     if '\n' in buffer:
                         lines = buffer.split('\n')
                         buffer = lines[-1]
+                        
                         for line in lines[:-1]:
                             line = line.strip()
                             if not line or not line.startswith('{'):
                                 continue
+                            
                             try:
                                 data_json = json.loads(line)
-                                radar_id = data_json.get("radar_id", self.radar_id)
-                                timestamp_ms = data_json.get("timestamp_ms", 0)
-                                person_count = data_json.get("person_count", 0)
-                                active_people = data_json.get("active_people", [])
-                                self.last_person_count = person_count  # Atualiza o contador para o resumo
-                                # Exibição bonita em tempo real
-                                os.system('clear')  # Limpa o terminal (funciona no Linux/Mac)
-                                print(f"\n{self.color} ═══ {self.radar_name.upper()} ═══")
-                                print(f"⏰ Timestamp: {timestamp_ms} ms")
-                                print(f"👥 Pessoas detectadas: {person_count}")
-                                if active_people:
-                                    print(f"{'ID':<4} {'Zona':<12} {'Distância(m)':<14} {'X':<10} {'Y':<10}")
-                                    print("-"*50)
-                                    for person in active_people:
-                                        person_id = person.get("id", "")
-                                        x_pos = person.get("x_pos", "")
-                                        y_pos = person.get("y_pos", "")
-                                        distance_smoothed = person.get("distance_smoothed", "")
-                                        zone = person.get("zone", "")
-                                        print(f"{person_id:<4} {zone:<12} {distance_smoothed:<14.3f} {x_pos:<10.3f} {y_pos:<10.3f}")
-                                else:
-                                    print("Nenhuma pessoa detectada no momento.")
-                                # Planilha
-                                if active_people:
-                                    for person in active_people:
-                                        person_id = person.get("id", "")
-                                        x_pos = person.get("x_pos", "")
-                                        y_pos = person.get("y_pos", "")
-                                        distance_raw = person.get("distance_raw", "")
-                                        distance_smoothed = person.get("distance_smoothed", "")
-                                        zone = person.get("zone", "")
-                                        row = [radar_id, timestamp_ms, person_count, person_id, x_pos, y_pos, distance_raw, distance_smoothed, zone]
-                                        if self.gsheets_manager:
-                                            self.gsheets_manager.worksheet.append_row(row)
-                                else:
-                                    row = [radar_id, timestamp_ms, person_count, "", "", "", "", "", ""]
-                                    if self.gsheets_manager:
-                                        self.gsheets_manager.worksheet.append_row(row)
+                                self.process_json_data(data_json)
+                            except json.JSONDecodeError as e:
+                                logger.debug(f"Linha JSON inválida ignorada: {line[:50]}...")
                             except Exception as e:
                                 logger.error(f"Erro ao processar linha JSON: {e}")
-                time.sleep(0.01)
-            except Exception as e:
-                logger.error(f"{self.color} {self.radar_name}: ❌ Erro no loop: {str(e)}")
-                time.sleep(1)
-
-    def process_counter_data(self, raw_data):
-        """Processa os dados do contador de pessoas"""
-        try:
-            data = parse_serial_data(raw_data)
-            if not data:
-                return
-
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Adicionar ou atualizar pessoa
-            person_id = self.people_counter.add_or_update_person(
-                data['x_point'], data['y_point']
-            )
-            
-            # Verificar entrada/saída
-            event_type = self.people_counter.check_entry_exit(person_id)
-            
-            # Preparar dados para a planilha
-            if self.gsheets_manager:
-                distance = self.people_counter.zone_manager.get_distance(data['x_point'], data['y_point'])
-                counter_data = {
-                    'timestamp': timestamp,
-                    'session_id': self.people_counter.session_id,
-                    'event_type': event_type or 'UPDATE',
-                    'current_count': self.people_counter.get_current_count(),
-                    'total_entries': self.people_counter.total_entries,
-                    'total_exits': self.people_counter.total_exits,
-                    'max_simultaneous': self.people_counter.max_simultaneous,
-                    'person_id': person_id,
-                    'x_position': data['x_point'],
-                    'y_position': data['y_point'],
-                    'distance': distance,
-                    'zone': self.people_counter.zone_manager.get_zone(data['x_point'], data['y_point']),
-                    'duration_in_area': self.people_counter.tracked_people[person_id].get_duration_in_area(),
-                    'speed': self.people_counter.tracked_people[person_id].get_average_speed(),
-                    'confidence_level': self.people_counter.tracked_people[person_id].confidence,
-                    'radar_id': self.radar_id
-                }
                 
-                success = self.gsheets_manager.insert_counter_data(counter_data)
-                if not success:
-                    logger.error(f"{self.color} {self.radar_name}: ❌ Falha ao enviar para Sheets")
+                time.sleep(0.01)
+                
+            except serial.SerialException as e:
+                consecutive_errors += 1
+                error_msg = str(e)
+                
+                if "Device not configured" in error_msg or "Errno 6" in error_msg:
+                    logger.error(f"{self.color} ❌ Dispositivo desconectado (Erro {consecutive_errors}/{max_consecutive_errors})")
+                    try:
+                        if self.serial_connection:
+                            self.serial_connection.close()
+                    except:
+                        pass
+                    self.serial_connection = None
+                    time.sleep(2)
+                elif "Errno 5" in error_msg or "Input/output error" in error_msg:
+                    logger.error(f"{self.color} ❌ Erro de I/O - dispositivo pode ter sido removido")
+                    self.serial_connection = None
+                    time.sleep(3)
+                else:
+                    logger.error(f"{self.color} ❌ Erro serial: {error_msg}")
+                    time.sleep(1)
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.warning(f"{self.color} ⚠️ Muitos erros consecutivos, pausando por 10s...")
+                    time.sleep(10)
+                    consecutive_errors = 0
+                    
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"{self.color} ❌ Erro inesperado no loop: {str(e)}")
+                time.sleep(2)
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.warning(f"{self.color} ⚠️ Muitos erros consecutivos, pausando...")
+                    time.sleep(10)
+                    consecutive_errors = 0
+
+    def convert_timestamp(self, timestamp_ms):
+        """Converte timestamp de milissegundos para formato brasileiro"""
+        try:
+            dt = datetime.now()
+            return dt.strftime('%d/%m/%Y %H:%M:%S')
+        except Exception as e:
+            logger.debug(f"Erro na conversão de timestamp: {e}")
+            return datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+
+    def format_duration(self, duration_ms):
+        """Formata duração em milissegundos para formato legível"""
+        try:
+            if duration_ms < 1000:
+                return f"{int(duration_ms)}ms"
+            elif duration_ms < 60000:
+                seconds = duration_ms / 1000
+                return f"{seconds:.1f}s"
+            elif duration_ms < 3600000:
+                minutes = duration_ms / 60000
+                return f"{minutes:.1f}min"
+            else:
+                hours = duration_ms / 3600000
+                return f"{hours:.1f}h"
+        except:
+            return "N/A"
+
+    def update_people_count(self, person_count, active_people):
+        """Sistema CORRIGIDO de tracking para eventos - lógica precisa de entrada/saída"""
+        current_time = time.time()
+        
+        current_people_dict = {}
+        
+        for i, person in enumerate(active_people):
+            x_pos = person.get('x_pos', 0)
+            y_pos = person.get('y_pos', 0) 
+            distance = person.get('distance_smoothed', person.get('distance_raw', 0))
+            
+            # ✅ CALCULA ZONA ESPECÍFICA DA ÁREA usando coordenadas x,y
+            zone = self.zone_manager.get_zone(x_pos, y_pos)
+            person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
+            
+            # ID baseado na posição arredondada (estável para pessoa parada)
+            stable_id = f"P_{self.area_tipo}_{zone}_{distance:.1f}_{i}"
+            
+            # Procura se já existe pessoa similar (mesma zona, distância similar)
+            found_existing = None
+            for existing_id, existing_person in self.current_people.items():
+                existing_dist = existing_person.get('distance_smoothed', 0)
+                existing_zone = existing_person.get('zone', '')
+                
+                if (existing_zone == zone and 
+                    abs(existing_dist - distance) < 0.3):
+                    found_existing = existing_id
+                    break
+            
+            if found_existing:
+                current_people_dict[found_existing] = person
+                current_people_dict[found_existing]['last_seen'] = current_time
+            else:
+                person['first_seen'] = current_time
+                person['last_seen'] = current_time
+                current_people_dict[stable_id] = person
+        
+        # Detecta ENTRADAS REAIS
+        new_entries = []
+        for person_id, person_info in current_people_dict.items():
+            if person_id not in self.current_people:
+                is_really_new = True
+                for old_id, old_person in self.previous_people.items():
+                    old_zone = old_person.get('zone', '')
+                    old_dist = old_person.get('distance_smoothed', 0)
+                    new_zone = person_info.get('zone', '')
+                    new_dist = person_info.get('distance_smoothed', 0)
+                    
+                    if (old_zone == new_zone and 
+                        abs(old_dist - new_dist) < 0.5 and
+                        (current_time - old_person.get('last_seen', 0)) < 2.0):
+                        is_really_new = False
+                        break
+                
+                if is_really_new:
+                    new_entries.append(person_id)
+                    self.total_people_detected += 1
+                    self.entries_count += 1
+                    self.unique_people_today.add(person_id)
+                    zone = person_info.get('zone', 'DESCONHECIDA')
+                    dist = person_info.get('distance_smoothed', 0)
+                    logger.info(f"🆕 ENTRADA {self.area_tipo}: {zone} {dist:.1f}m (Total: {self.total_people_detected})")
+        
+        # Detecta SAÍDAS REAIS
+        exits = []
+        for person_id, person_info in self.current_people.items():
+            if person_id not in current_people_dict:
+                last_seen = person_info.get('last_seen', 0)
+                if (current_time - last_seen) > 1.0:
+                    exits.append(person_id)
+                    self.exits_count += 1
+                    zone = person_info.get('zone', 'DESCONHECIDA')
+                    dist = person_info.get('distance_smoothed', 0)
+                    logger.info(f"🚪 SAÍDA {self.area_tipo}: {zone} {dist:.1f}m")
+        
+        # Atualiza estado
+        self.previous_people = self.current_people.copy()
+        self.current_people = current_people_dict
+        
+        # Atualiza máximo simultâneo
+        current_simultaneous = len(current_people_dict)
+        if current_simultaneous > self.max_simultaneous_people:
+            self.max_simultaneous_people = current_simultaneous
+            logger.info(f"📊 NOVO MÁXIMO {self.area_tipo}: {self.max_simultaneous_people} pessoas")
+        
+        self.last_update_time = current_time
+
+    def process_json_data(self, data_json):
+        """Processa dados JSON multi-pessoa v4.2 recebidos do radar"""
+        try:
+            radar_id = data_json.get("radar_id", self.radar_id)
+            timestamp_ms = data_json.get("timestamp_ms", 0)
+            person_count = data_json.get("person_count", 0)
+            active_people = data_json.get("active_people", [])
+            
+            formatted_timestamp = self.convert_timestamp(timestamp_ms)
+            
+            # Atualiza contadores locais
+            self.update_people_count(person_count, active_people)
+            
+            # Display em tempo real
+            print(f"\n{self.color} ═══ GRAVATÁ {self.area_tipo} - TRACKING AVANÇADO ═══")
+            print(f"⏰ {formatted_timestamp}")
+            print(f"📡 {radar_id} | 👥 ATIVAS: {person_count}")
+            print(f"🎯 TOTAL {self.area_tipo}: {self.total_people_detected} | 📊 MÁXIMO: {self.max_simultaneous_people}")
+            print(f"🔄 ENTRADAS: {self.entries_count} | 🚪 SAÍDAS: {self.exits_count}")
+            
+            if active_people and len(active_people) > 0:
+                print(f"\n👥 PESSOAS NA ÁREA {self.area_tipo} ({len(active_people)}):")
+                print(f"{'Zona':<20} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8}")
+                print("-" * 55)
+                
+                current_time = time.time()
+                for i, person in enumerate(active_people):
+                    confidence = person.get("confidence", 0)
+                    distance_smoothed = person.get("distance_smoothed", 0)
+                    x_pos = person.get("x_pos", 0)
+                    y_pos = person.get("y_pos", 0)
+                    stationary = person.get("stationary", False)
+                    
+                    # ✅ CALCULA ZONA ESPECÍFICA DA ÁREA usando coordenadas x,y
+                    zone = self.zone_manager.get_zone(x_pos, y_pos)
+                    person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
+                    
+                    status = "Parado" if stationary else "Móvel"
+                    pos_str = f"{x_pos:.1f},{y_pos:.1f}"
+                    
+                    zone_desc = self.zone_manager.get_zone_description(zone)[:19]
+                    print(f"{zone_desc:<20} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8}")
+                
+                # Envia dados para planilha (formato específico Gravatá)
+                if self.gsheets_manager:
+                    avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
+                    zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
+                    zones_str = ",".join(sorted(zones_detected))
+                    
+                    if len(active_people) == 1:
+                        person_description = f"Pessoa_{self.area_tipo}"
+                    elif len(active_people) <= 3:
+                        person_description = f"Grupo_Pequeno_{self.area_tipo}"
+                    elif len(active_people) <= 10:
+                        person_description = f"Grupo_Medio_{self.area_tipo}"
+                    else:
+                        person_description = f"Grupo_Grande_{self.area_tipo}"
+                    
+                    # Formato específico para Gravatá (diferente do Santa Cruz)
+                    row = [
+                        radar_id,                                    # 1. radar_id
+                        formatted_timestamp,                         # 2. timestamp  
+                        self.area_tipo,                             # 3. area_tipo (EXTERNA/INTERNA)
+                        len(active_people),                         # 4. person_count
+                        person_description,                         # 5. person_id
+                        zones_str,                                  # 6. zone
+                        f"{sum(p.get('distance_smoothed', 0) for p in active_people) / len(active_people):.1f}",  # 7. distance
+                        f"{avg_confidence:.0f}",                    # 8. confidence
+                        self.total_people_detected,                 # 9. total_detected
+                        self.max_simultaneous_people,               # 10. max_simultaneous
+                        'ATIVA'                                     # 11. area_status
+                    ]
+                    self.pending_data.append(row)
+                
+                print(f"\n💡 ÁREA {self.area_tipo}: {len(active_people)} pessoa(s) ATIVAS")
+                
+            else:
+                print(f"\n👻 Área {self.area_tipo} vazia no momento.")
+                
+                # Dados zerados para área vazia
+                if self.gsheets_manager and len(self.previous_people) > 0:
+                    row = [
+                        radar_id,                           # 1. radar_id
+                        formatted_timestamp,                # 2. timestamp
+                        self.area_tipo,                    # 3. area_tipo
+                        0,                                 # 4. person_count
+                        f"Vazia_{self.area_tipo}",         # 5. person_id
+                        "VAZIA",                           # 6. zone
+                        "0",                               # 7. distance
+                        "0",                               # 8. confidence
+                        self.total_people_detected,        # 9. total_detected
+                        self.max_simultaneous_people,      # 10. max_simultaneous
+                        'VAZIA'                            # 11. area_status
+                    ]
+                    self.pending_data.append(row)
+            
+            print("=" * 60)
+            
+            # Envia dados controladamente
+            self.send_pending_data_to_sheets()
             
         except Exception as e:
-            logger.error(f"{self.color} {self.radar_name}: ❌ Erro ao processar dados: {str(e)}")
+            logger.error(f"Erro ao processar dados JSON {self.area_tipo}: {e}")
 
-    def output_statistics(self):
-        """Exibir estatísticas atuais do contador"""
-        current_count = self.get_current_count()
-        
-        # Contar pessoas por zona
-        zone_counts = defaultdict(int)
-        for person in self.people_counter.tracked_people.values():
-            if person.is_active:
-                zone = self.people_counter.zone_manager.get_zone(person.x, person.y)
-                zone_counts[zone] += 1
-        
-        if self.radar_id == 'RADAR_1':
-            zone1_name = "ENTRADA"
-            zone2_name = "PASSAGEM"
-        else:
-            zone1_name = "INTERESSE"
-            zone2_name = "CIRCULACAO"
-        
-        output = [
-            f"\n{self.color} ═══ {self.radar_name.upper()} ═══",
-            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"📊 Sessão: {self.people_counter.session_id}",
-            "-" * 50,
-            f"👤 Pessoas Ativas: {current_count}",
-            f"🎯 Zona {zone1_name}: {zone_counts[zone1_name]} pessoas",
-            f"🚶 Zona {zone2_name}: {zone_counts[zone2_name]} pessoas",
-            f"🎯 Máximo Simultâneo: {self.people_counter.max_simultaneous}",
-            f"🎯 Total Entradas: {self.people_counter.total_entries}",
-            f"🚶 Total Saídas: {self.people_counter.total_exits}",
-            f"⏱️ Duração da Sessão: {time.time() - self.people_counter.session_start_time:.0f}s",
-            "═" * 50
-        ]
-        
-        logger.info("\n".join(output))
+    def send_pending_data_to_sheets(self):
+        """Envia dados para Google Sheets de forma controlada"""
+        try:
+            current_time = time.time()
+            
+            if (current_time - self.last_sheets_write) < self.sheets_write_interval:
+                return
+            
+            if not self.pending_data or not self.gsheets_manager:
+                return
+            
+            data_to_send = self.pending_data[-10:] if len(self.pending_data) > 10 else self.pending_data
+            
+            if data_to_send:
+                logger.info(f"📊 Enviando {len(data_to_send)} linhas {self.area_tipo} para planilha...")
+                
+                for row in data_to_send:
+                    self.gsheets_manager.worksheet.append_row(row)
+                    time.sleep(0.5)
+                
+                logger.info(f"✅ {len(data_to_send)} linhas {self.area_tipo} enviadas!")
+                
+                self.last_sheets_write = current_time
+                self.pending_data = []
+                
+        except Exception as e:
+            logger.error(f"❌ Erro ao enviar dados {self.area_tipo}: {e}")
+            if "quota" in str(e).lower() or "429" in str(e):
+                logger.warning("⚠️ Quota excedida - aumentando intervalo")
+                self.sheets_write_interval = 60.0
 
     def get_current_count(self):
-        """Retorna o último person_count recebido do Arduino"""
-        return self.last_person_count
+        return len(self.current_people)
+    
+    def get_total_detected(self):
+        return self.total_people_detected
 
-class EstandeCounterSystem:
+    def get_status(self):
+        """Retorna status completo do radar"""
+        return {
+            'id': self.radar_id,
+            'name': self.radar_name,
+            'area_tipo': self.area_tipo,
+            'port': self.port,
+            'running': self.is_running,
+            'connected': self.serial_connection and self.serial_connection.is_open if self.serial_connection else False,
+            'description': self.description,
+            'current_count': self.get_current_count(),
+            'total_detected': self.get_total_detected(),
+            'max_simultaneous': self.max_simultaneous_people,
+            'entries_count': self.entries_count,
+            'exits_count': self.exits_count,
+            'unique_people': len(self.unique_people_today),
+            'people_in_area': len(self.current_people),
+            'session_duration': (datetime.now() - self.session_start_time).total_seconds()
+        }
+
+class GravataDualRadarSystem:
     def __init__(self):
         self.radars = []
-        self.gsheets_managers = {}
-        
+        self.gsheets_manager = None
+        self.is_running = False
+
     def detect_available_ports(self):
-        """Detecta portas seriais disponíveis e atualiza configurações"""
-        logger.info("🔍 Detectando portas seriais disponíveis...")
-        
+        """Detecta portas seriais disponíveis"""
         ports = list(serial.tools.list_ports.comports())
-        radar_ports = []
+        available_ports = []
         
+        logger.info("🔍 Detectando portas seriais...")
         for port in ports:
-            desc_lower = port.description.lower()
-            if any(term in desc_lower for term in 
-                   ['usb', 'serial', 'uart', 'cp210', 'ch340', 'ft232', 'arduino', 'esp32', 'acm', 'jtag']):
-                radar_ports.append(port.device)
-                logger.info(f"   📡 Porta detectada: {port.device} ({port.description})")
+            logger.info(f"   📡 {port.device} - {port.description}")
+            available_ports.append(port.device) 
         
-        if len(radar_ports) >= 2:
-            # Atualiza as configurações com as portas encontradas
-            for i, config in enumerate(RADAR_CONFIGS[:2]):
-                if i < len(radar_ports):
-                    config['port'] = radar_ports[i]
-                    logger.info(f"   ✅ {config['name']} configurado para {radar_ports[i]}")
-            return True
-        else:
-            logger.error(f"❌ Apenas {len(radar_ports)} portas encontradas. Necessárias 2 para dual radar.")
-            return False
+        return available_ports
 
     def initialize(self):
-        """Inicializa o sistema dual radar counter"""
-        logger.info("🚀 Inicializando Sistema Dual Contador de Pessoas...")
-        
-        # Detecta portas disponíveis
-        if not self.detect_available_ports():
-            return False
-        
-        # Inicializa Google Sheets para cada radar usando IDs específicos
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        credentials_file = os.path.join(script_dir, 'serial_radar', 'credenciais.json')
-        
-        for config in RADAR_CONFIGS:
-            try:
-                gsheets_manager = GoogleSheetsCounterManager(
-                    credentials_file, 
-                    config['spreadsheet_id'],
-                    config['id']
-                )
-                self.gsheets_managers[config['id']] = gsheets_manager
-                logger.info(f"✅ Google Sheets configurado para {config['name']}")
-            except Exception as e:
-                logger.error(f"❌ Erro ao configurar Sheets para {config['name']}: {e}")
+        """Inicializa o sistema dual radar"""
+        try:
+            # Detecta portas disponíveis
+            available_ports = self.detect_available_ports()
+            
+            if len(available_ports) < 2:
+                logger.error(f"❌ Necessário 2 portas, encontradas {len(available_ports)}")
+                logger.info("💡 Conecte 2 dispositivos radar antes de prosseguir")
                 return False
-        
-        # Inicializa radares
-        for config in RADAR_CONFIGS:
-            radar = RadarCounterManager(config)
-            self.radars.append(radar)
-        
-        return True
+            
+            # Ajusta configurações de porta se necessário
+            for i, config in enumerate(RADAR_CONFIGS):
+                if config['port'] not in available_ports:
+                    if i < len(available_ports):
+                        new_port = available_ports[i]
+                        logger.warning(f"⚠️ Porta {config['port']} não encontrada, usando {new_port}")
+                        config['port'] = new_port
+                    else:
+                        logger.error(f"❌ Não há portas suficientes para {config['id']}")
+                        return False
+            
+            # Configura Google Sheets (compartilhado)
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            credentials_file = os.path.join(script_dir, CREDENTIALS_FILE)
+            
+            if not os.path.exists(credentials_file):
+                logger.error(f"❌ Credenciais não encontradas: {credentials_file}")
+                return False
+            
+            # Usa ID da primeira configuração (ambos usam a mesma planilha)
+            spreadsheet_id = RADAR_CONFIGS[0]['spreadsheet_id']
+            
+            self.gsheets_manager = GoogleSheetsManager(
+                credentials_file,
+                spreadsheet_id,
+                'GRAVATA_DUAL'
+            )
+            
+            # Inicializa radares
+            for config in RADAR_CONFIGS:
+                radar = SingleRadarCounter(config)
+                self.radars.append(radar)
+            
+            logger.info("✅ Sistema Dual Radar Gravatá inicializado!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro na inicialização: {e}")
+            return False
 
     def start(self):
-        """Inicia todos os radares"""
-        logger.info("🚀 Iniciando contagem de pessoas do estande...")
-        
-        for radar in self.radars:
-            gsheets_manager = self.gsheets_managers.get(radar.radar_id)
-            if gsheets_manager:
-                success = radar.start(gsheets_manager)
-                if not success:
-                    logger.error(f"❌ Falha ao iniciar {radar.radar_name}")
-                    return False
-            else:
-                logger.error(f"❌ Google Sheets não encontrado para {radar.radar_name}")
+        """Inicia ambos os radares"""
+        try:
+            if not self.gsheets_manager:
+                logger.error("❌ Sistema não inicializado")
                 return False
-        
-        logger.info("🎯 Sistema de contagem de pessoas ativo!")
-        return True
+            
+            # Inicia cada radar
+            failed_radars = []
+            for radar in self.radars:
+                if not radar.start(self.gsheets_manager):
+                    failed_radars.append(radar.radar_id)
+            
+            if failed_radars:
+                logger.error(f"❌ Falha ao iniciar radares: {failed_radars}")
+                return False
+            
+            self.is_running = True
+            logger.info("🚀 Sistema Dual Radar Gravatá ATIVO!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao iniciar sistema: {e}")
+            return False
 
     def stop(self):
         """Para todos os radares"""
-        logger.info("🛑 Parando contagem de pessoas...")
+        self.is_running = False
         
         for radar in self.radars:
             radar.stop()
         
-        logger.info("✅ Sistema encerrado!")
+        logger.info("🛑 Sistema Dual Radar Gravatá parado!")
 
     def get_status(self):
-        """Retorna status do sistema"""
+        """Status de ambos os radares"""
         status = {
-            'total_radars': len(self.radars),
-            'running_radars': sum(1 for r in self.radars if r.is_running),
+            'system_running': self.is_running,
             'radars': []
         }
         
         for radar in self.radars:
-            radar_status = {
-                'id': radar.radar_id,
-                'name': radar.radar_name,
-                'port': radar.port,
-                'running': radar.is_running,
-                'connected': radar.serial_connection and radar.serial_connection.is_open if radar.serial_connection else False,
-                'description': radar.description,
-                'current_count': radar.get_current_count() if radar.is_running else 0,
-                'total_entries': radar.people_counter.total_entries if radar.is_running else 0
-            }
-            status['radars'].append(radar_status)
+            status['radars'].append(radar.get_status())
         
         return status
 
+def list_available_ports():
+    """Lista todas as portas seriais disponíveis"""
+    ports = list(serial.tools.list_ports.comports())
+    
+    print("\n🔍 DIAGNÓSTICO DE PORTAS SERIAIS - GRAVATÁ DUAL")
+    print("=" * 60)
+    
+    if not ports:
+        print("❌ Nenhuma porta serial encontrada!")
+        return []
+    
+    print(f"✅ {len(ports)} porta(s) encontrada(s):")
+    
+    for i, port in enumerate(ports, 1):
+        print(f"\n📡 Porta {i}:")
+        print(f"   Dispositivo: {port.device}")
+        print(f"   Descrição: {port.description}")
+        print(f"   Fabricante: {port.manufacturer or 'N/A'}")
+        
+        desc_lower = port.description.lower()
+        if any(term in desc_lower for term in 
+               ['usb', 'serial', 'uart', 'cp210', 'ch340', 'ft232', 'arduino', 'esp32', 'modem']):
+            print(f"   🎯 ADEQUADA para radar")
+        else:
+            print(f"   ⚠️ Pode não ser adequada")
+    
+    print("\n" + "=" * 60)
+    return [port.device for port in ports]
+
 def main():
-    """Função principal"""
-    counter_system = EstandeCounterSystem()
+    """Função principal do sistema dual radar Gravatá"""
+    logger.info("🚀 Inicializando Sistema DUAL RADAR GRAVATÁ...")
+    
+    # Diagnóstico de portas
+    available_ports = list_available_ports()
+    
+    if len(available_ports) < 2:
+        logger.error("❌ Sistema dual necessita 2 portas seriais!")
+        logger.info("💡 Conecte 2 dispositivos radar USB")
+        return
+    
+    # Inicializa sistema
+    system = GravataDualRadarSystem()
     
     try:
-        # Inicializa o sistema
-        if not counter_system.initialize():
-            logger.error("❌ Falha na inicialização do sistema")
+        if not system.initialize():
+            logger.error("❌ Falha na inicialização")
             return
         
-        # Inicia os radares
-        if not counter_system.start():
-            logger.error("❌ Falha ao iniciar os radares") 
+        if not system.start():
+            logger.error("❌ Falha ao iniciar sistema")
             return
         
-        # Exibe status
-        status = counter_system.get_status()
-        logger.info("=" * 70)
-        logger.info("👥 SISTEMA CONTADOR DE PESSOAS - ESTANDE ATIVO")
-        logger.info("=" * 70)
-        for radar_status in status['radars']:
-            status_icon = "🟢" if radar_status['running'] else "🔴"
-            logger.info(f"{status_icon} {radar_status['name']}: {radar_status['port']}")
-            logger.info(f"    📋 {radar_status['description']}")
-        logger.info("⚡ Pressione Ctrl+C para encerrar")
-        logger.info("=" * 70)
+        # Status inicial
+        logger.info("=" * 80)
+        logger.info("🔴🔵 SISTEMA DUAL RADAR GRAVATÁ - TRACKING AVANÇADO")
+        logger.info("=" * 80)
+        logger.info("🔴 RADAR EXTERNO: Área Externa")
+        logger.info("🔵 RADAR INTERNO: Área Interna")
+        logger.info("📊 PLANILHA ÚNICA: Dados de ambas as áreas")
+        logger.info("🎯 Sistema baseado no codigo_sj1.py - Tracking Robusto")
+        logger.info("⚡ Lógica avançada de entrada/saída por área")
+        logger.info("🔄 Reconexão automática habilitada")
+        logger.info("=" * 80)
         
-        # Mantém o sistema rodando
+        # Loop principal
+        status_counter = 0
         while True:
             time.sleep(5)
+            status_counter += 1
             
-            # Status rápido a cada 30 segundos
-            if int(time.time()) % 30 == 0:
-                current_status = counter_system.get_status()
-                total_people = sum(r['current_count'] for r in current_status['radars'])
-                total_entries = sum(r['total_entries'] for r in current_status['radars'])
+            if status_counter >= 6:  # Status a cada 30s
+                status_counter = 0
+                status = system.get_status()
                 
-                if current_status['running_radars'] != current_status['total_radars']:
-                    logger.warning(f"⚠️ Apenas {current_status['running_radars']}/{current_status['total_radars']} radares ativos")
+                if system.is_running:
+                    for radar_status in status['radars']:
+                        area = radar_status['area_tipo']
+                        current = radar_status['people_in_area']
+                        total = radar_status['total_detected']
+                        entries = radar_status['entries_count']
+                        exits = radar_status['exits_count']
+                        max_sim = radar_status['max_simultaneous']
+                        
+                        color = '🔴' if area == 'EXTERNA' else '🔵'
+                        logger.info(f"{color} {area}: {current} ativas | {total} total | {entries} entradas | {exits} saídas | Máx: {max_sim}")
                 else:
-                    logger.info(f"📊 RESUMO: {total_people} pessoas ativas | {total_entries} entradas totais")
+                    logger.warning("⚠️ Sistema não está ativo")
     
     except KeyboardInterrupt:
         logger.info("🛑 Encerrando por solicitação do usuário...")
@@ -876,7 +933,8 @@ def main():
         logger.error(traceback.format_exc())
     
     finally:
-        counter_system.stop()
+        system.stop()
+        logger.info("✅ Sistema Dual Radar Gravatá encerrado!")
 
 if __name__ == "__main__":
     main() 
