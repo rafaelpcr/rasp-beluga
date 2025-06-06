@@ -116,8 +116,8 @@ class ZoneManager:
             # CENTRO (X entre -0.8 e 0.8)
             'CENTRO': {
                 'x_min': -1.0, 'x_max': 1.0,
-                'y_min': 2.0, 'y_max': 4.5,
-                'distance_range': (1.0, 5.0)
+                'y_min': 1.0, 'y_max': 4.5,
+                'distance_range': (2.0, 5.0)
             },
             
             # LADO DIREITO (X > 0.5)
@@ -162,7 +162,7 @@ class ZoneManager:
         descriptions = {
             'SALA_REBOCO': 'Sala de Reboco',
             'IGREJINHA': 'Igrejinha', 
-            'CORETO': 'Coreto',
+            'CENTRO': 'Centro',
             'ARGOLA': 'Jogo da Argola',
             'BEIJO': 'Barraca do Beijo',
             'PESCARIA': 'Pescaria',
