@@ -754,7 +754,7 @@ class SingleRadarCounter:
 
     def get_status(self):
         """Retorna status completo do radar"""
-        return {
+        status = {
             'id': self.radar_id,
             'name': self.radar_name,
             'area_tipo': self.area_tipo,
@@ -771,6 +771,9 @@ class SingleRadarCounter:
             'people_in_area': len(self.current_people),
             'session_duration': (datetime.now() - self.session_start_time).total_seconds()
         }
+        status['timestamp'] = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+        status['last_debug'] = getattr(self, 'last_debug', '')
+        return status
 
 class GravataDualRadarSystem:
     def __init__(self):
@@ -916,73 +919,59 @@ def list_available_ports():
     print("\n" + "=" * 60)
     return [port.device for port in ports]
 
+def print_dual_status(radar_interna, radar_externa):
+    """Exibe status das duas áreas lado a lado no terminal"""
+    os.system('clear')
+    status_int = radar_interna.get_status()
+    status_ext = radar_externa.get_status()
+    
+    print(f"{'🔵 GRAVATÁ INTERNA':<40} | {'🔴 GRAVATÁ EXTERNA':<40}")
+    print(f"{'='*38:<40} | {'='*38:<40}")
+    print(f"{status_int['timestamp'] if 'timestamp' in status_int else '':<40} | {status_ext['timestamp'] if 'timestamp' in status_ext else '' :<40}")
+    print(f"{status_int['id']} | 👥 {status_int['current_count']} ativas{'':<24} | {status_ext['id']} | 👥 {status_ext['current_count']} ativas")
+    print(f"Entradas: {status_int['entries_count']} | Saídas: {status_int['exits_count']:<10} | Entradas: {status_ext['entries_count']} | Saídas: {status_ext['exits_count']}")
+    print(f"Total: {status_int['total_detected']} | Máx: {status_int['max_simultaneous']:<12} | Total: {status_ext['total_detected']} | Máx: {status_ext['max_simultaneous']}")
+    print(f"{'='*38:<40} | {'='*38:<40}")
+    print()
+    print(f"Debug interna: {status_int.get('last_debug', '')}")
+    print(f"Debug externa: {status_ext.get('last_debug', '')}")
+    print()
+
 def main():
     """Função principal do sistema dual radar Gravatá"""
-    logger.info("🚀 Inicializando Sistema DUAL RADAR GRAVATÁ...")
-    
-    # Diagnóstico de portas
+    logger.info("🚀 Inicializando Sistema DUAL RADAR GRAVATÁ (painel duplo)...")
     available_ports = list_available_ports()
-    
     if len(available_ports) < 2:
         logger.error("❌ Sistema dual necessita 2 portas seriais!")
         logger.info("💡 Conecte 2 dispositivos radar USB")
         return
-    
-    # Inicializa sistema
     system = GravataDualRadarSystem()
-    
     try:
         if not system.initialize():
             logger.error("❌ Falha na inicialização")
             return
-        
         if not system.start():
             logger.error("❌ Falha ao iniciar sistema")
             return
-        
-        # Status inicial
-        logger.info("=" * 80)
-        logger.info("🔴🔵 SISTEMA DUAL RADAR GRAVATÁ - TRACKING AVANÇADO")
-        logger.info("=" * 80)
-        logger.info("🔴 RADAR EXTERNO: Área Externa")
-        logger.info("🔵 RADAR INTERNO: Área Interna")
-        logger.info("📊 PLANILHA ÚNICA: Dados de ambas as áreas")
-        logger.info("🎯 Sistema baseado no codigo_sj1.py - Tracking Robusto")
-        logger.info("⚡ Lógica avançada de entrada/saída por área")
-        logger.info("🔄 Reconexão automática habilitada")
-        logger.info("=" * 80)
-        
+        radar_interna = None
+        radar_externa = None
+        for radar in system.radars:
+            if radar.area_tipo == 'INTERNA':
+                radar_interna = radar
+            elif radar.area_tipo == 'EXTERNA':
+                radar_externa = radar
+        if not radar_interna or not radar_externa:
+            logger.error("❌ Não encontrou ambos radares INTERNA e EXTERNA!")
+            return
         # Loop principal
-        status_counter = 0
         while True:
-            time.sleep(5)
-            status_counter += 1
-            
-            if status_counter >= 6:  # Status a cada 30s
-                status_counter = 0
-                status = system.get_status()
-                
-                if system.is_running:
-                    for radar_status in status['radars']:
-                        area = radar_status['area_tipo']
-                        current = radar_status['people_in_area']
-                        total = radar_status['total_detected']
-                        entries = radar_status['entries_count']
-                        exits = radar_status['exits_count']
-                        max_sim = radar_status['max_simultaneous']
-                        
-                        color = '🔴' if area == 'EXTERNA' else '🔵'
-                        logger.info(f"{color} {area}: {current} ativas | {total} total | {entries} entradas | {exits} saídas | Máx: {max_sim}")
-                else:
-                    logger.warning("⚠️ Sistema não está ativo")
-    
+            print_dual_status(radar_interna, radar_externa)
+            time.sleep(2)
     except KeyboardInterrupt:
         logger.info("🛑 Encerrando por solicitação do usuário...")
-    
     except Exception as e:
         logger.error(f"❌ Erro inesperado: {str(e)}")
         logger.error(traceback.format_exc())
-    
     finally:
         system.stop()
         logger.info("✅ Sistema Dual Radar Gravatá encerrado!")
