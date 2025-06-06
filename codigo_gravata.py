@@ -137,48 +137,51 @@ class ZoneManager:
                 }
             }
         else:  # INTERNA
-            # ✅ ÁREA INTERNA: CORRIGIDA para capturar distâncias menores
+            # ✅ ÁREA INTERNA: EXPANDIDA para capturar melhor as ativações
             self.ZONA_CONFIGS = {
-                # CENTRO - zona principal para distâncias próximas
-                'CENTRO': {
-                    'x_min': -2.0, 'x_max': 2.0,
-                    'y_min': 0.5, 'y_max': 3.0,
-                    'distance_range': (0.5, 3.0)  # ✅ Incluindo distâncias pequenas
-                },
-                
-                # LADO ESQUERDO (X < -0.5)
+                # LADO ESQUERDO (X < -0.8) - Expandido
                 'SALA_REBOCO': {
-                    'x_min': -3.5, 'x_max': -0.5,
-                    'y_min': 0.5, 'y_max': 3.5,
-                    'distance_range': (0.8, 4.0)  # ✅ Distâncias menores
+                    'x_min': -4.0, 'x_max': -0.8,
+                    'y_min': 0.2, 'y_max': 4.0,
+                    'distance_range': (0.8, 5.0)  # ✅ Range expandido
                 },
                 'IGREJINHA': {
-                    'x_min': -3.0, 'x_max': -0.5,
-                    'y_min': 2.5, 'y_max': 5.5,
-                    'distance_range': (1.5, 6.0)
+                    'x_min': -4.0, 'x_max': -0.8,
+                    'y_min': 2.0, 'y_max': 7.0,
+                    'distance_range': (2.0, 8.0)  # ✅ Range expandido
                 },
                 
-                # LADO DIREITO (X > 0.5)
+                # LADO DIREITO (X > 0.8) - Expandido
                 'BEIJO': {
-                    'x_min': 0.5, 'x_max': 3.0,
-                    'y_min': 1.0, 'y_max': 4.0,
-                    'distance_range': (1.0, 5.0)  # ✅ Distâncias menores
-                },
-                'ARGOLA': {
-                    'x_min': 0.5, 'x_max': 3.0,
-                    'y_min': 3.5, 'y_max': 6.5,
-                    'distance_range': (3.0, 7.0)
+                    'x_min': 0.8, 'x_max': 4.0,
+                    'y_min': 0.5, 'y_max': 5.0,
+                    'distance_range': (1.0, 6.0)  # ✅ Range expandido
                 },
                 'PESCARIA': {
-                    'x_min': 1.0, 'x_max': 4.0,
-                    'y_min': 0.5, 'y_max': 3.0,
-                    'distance_range': (2.0, 6.0)
+                    'x_min': 0.8, 'x_max': 5.0,
+                    'y_min': 0.2, 'y_max': 4.0,
+                    'distance_range': (2.0, 7.0)  # ✅ Range expandido
+                },
+                'ARGOLA': {
+                    'x_min': 0.8, 'x_max': 4.0,
+                    'y_min': 3.0, 'y_max': 8.0,
+                    'distance_range': (3.0, 9.0)  # ✅ Range expandido
+                },
+                
+                # CENTRO - Apenas para posições muito centrais
+                'CENTRO': {
+                    'x_min': -0.8, 'x_max': 0.8,
+                    'y_min': 0.5, 'y_max': 2.5,
+                    'distance_range': (0.3, 2.5)  # ✅ Restrito apenas para muito perto
                 }
             }
         
     def get_zone(self, x, y):
-        """Determinar zona CORRIGIDA - prioriza distância para área interna"""
+        """Determinar zona MELHORADA - prioriza posição X e distância"""
         distance = self.get_distance(x, y)
+        
+        # Debug temporário para mostrar teste de zonas
+        debug_info = []
         
         if self.area_tipo == 'EXTERNA':
             # Área externa: verifica posição e distância
@@ -194,37 +197,69 @@ class ZoneManager:
             else:
                 return 'AREA_PASSAGEM'
         
-        else:  # INTERNA - LÓGICA CORRIGIDA
-            # ✅ PRIMEIRO: Tenta baseado na distância E posição
+        else:  # INTERNA - LÓGICA MELHORADA
+            # ✅ PRIMEIRO: Testa todas as zonas específicas
             for zona_name, config in self.ZONA_CONFIGS.items():
-                if (config['x_min'] <= x <= config['x_max'] and
-                    config['y_min'] <= y <= config['y_max'] and
-                    config['distance_range'][0] <= distance <= config['distance_range'][1]):
+                x_ok = config['x_min'] <= x <= config['x_max']
+                y_ok = config['y_min'] <= y <= config['y_max']
+                dist_ok = config['distance_range'][0] <= distance <= config['distance_range'][1]
+                
+                debug_info.append(f"{zona_name}: X({x_ok}) Y({y_ok}) D({dist_ok})")
+                
+                if x_ok and y_ok and dist_ok:
+                    logger.info(f"🎯 ZONA ENCONTRADA por configuração específica: {zona_name}")
+                    logger.info(f"   Testes: {' | '.join(debug_info)}")
                     return zona_name
             
-            # ✅ SEGUNDO: Se não encontrou, usa APENAS a distância
-            if distance <= 1.5:
-                return 'CENTRO'  # Distâncias muito próximas = centro
-            elif distance <= 3.0:
-                # Baseado na posição X para decidir lado
-                if x < -0.5:
+            # ✅ SEGUNDO: Fallback baseado PRINCIPALMENTE na posição X e distância
+            logger.info(f"🔄 FALLBACK ATIVADO - Nenhuma zona específica encontrada")
+            logger.info(f"   Testes realizados: {' | '.join(debug_info)}")
+            
+            if x < -0.8:  # LADO ESQUERDO
+                logger.info(f"📍 FALLBACK: LADO ESQUERDO (X={x:.2f} < -0.8)")
+                if distance <= 3.0:
+                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 3.0m → SALA_REBOCO")
                     return 'SALA_REBOCO'
-                elif x > 0.5:
-                    return 'BEIJO'
-                else:
-                    return 'CENTRO'
-            elif distance <= 5.0:
-                # Distâncias médias
-                if x < -0.5:
+                elif distance <= 7.0:
+                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 7.0m → IGREJINHA")
                     return 'IGREJINHA'
-                elif x > 0.5:
-                    return 'PESCARIA'
                 else:
-                    return 'CENTRO'
-            elif distance <= 7.0:
-                return 'ARGOLA'  # Distâncias maiores
-            else:
-                return 'FORA_ATIVACOES'
+                    logger.info(f"   ❌ Distância {distance:.2f}m > 7.0m → FORA_ATIVACOES")
+                    return 'FORA_ATIVACOES'
+                    
+            elif x > 0.8:  # LADO DIREITO
+                logger.info(f"📍 FALLBACK: LADO DIREITO (X={x:.2f} > 0.8)")
+                if distance <= 2.5:
+                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 2.5m → BEIJO")
+                    return 'BEIJO'
+                elif distance <= 5.0:
+                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 5.0m → PESCARIA")
+                    return 'PESCARIA'
+                elif distance <= 8.0:
+                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 8.0m → ARGOLA")
+                    return 'ARGOLA'
+                else:
+                    logger.info(f"   ❌ Distância {distance:.2f}m > 8.0m → FORA_ATIVACOES")
+                    return 'FORA_ATIVACOES'
+                    
+            else:  # CENTRO (-0.8 <= X <= 0.8)
+                logger.info(f"📍 FALLBACK: ZONA CENTRAL (-0.8 ≤ X={x:.2f} ≤ 0.8)")
+                if distance <= 1.5:
+                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 1.5m → CENTRO")
+                    return 'CENTRO'  # Só muito próximo é centro
+                elif distance <= 4.0:
+                    # Baseado em Y para decidir se vai para lado esquerdo ou direito
+                    if y > 2.5:
+                        result = 'IGREJINHA' if x < 0 else 'ARGOLA'
+                        logger.info(f"   ✅ Y={y:.2f} > 2.5, X={'<0' if x<0 else '≥0'} → {result}")
+                        return result
+                    else:
+                        result = 'SALA_REBOCO' if x < 0 else 'BEIJO'
+                        logger.info(f"   ✅ Y={y:.2f} ≤ 2.5, X={'<0' if x<0 else '≥0'} → {result}")
+                        return result
+                else:
+                    logger.info(f"   ❌ Distância {distance:.2f}m > 4.0m → FORA_ATIVACOES")
+                    return 'FORA_ATIVACOES'
     
     def get_distance(self, x, y):
         """Calcular distância do radar"""
@@ -676,12 +711,23 @@ class SingleRadarCounter:
                     y_pos = person.get("y_pos", 0)
                     stationary = person.get("stationary", False)
 
-                    # ✅ CALCULA ZONA CORRIGIDA (com debug)
+                    # ✅ CALCULA ZONA MELHORADA (com debug detalhado)
                     zone = self.zone_manager.get_zone(x_pos, y_pos)
                     person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
 
-                    # 🔍DEBUG: Mostra cálculo da zona
-                    logger.debug(f"🔍 DEBUG ZONA {self.area_tipo}: X={x_pos:.2f}, Y={y_pos:.2f}, Dist={distance_smoothed:.2f}m → {zone}")
+                    # 🔍DEBUG DETALHADO: Mostra todo o processo de cálculo
+                    calculated_distance = self.zone_manager.get_distance(x_pos, y_pos)
+                    logger.info(f"🔍 DEBUG {self.area_tipo}: X={x_pos:.2f}, Y={y_pos:.2f}")
+                    logger.info(f"   📏 Distância calculada: {calculated_distance:.2f}m (Arduino: {distance_smoothed:.2f}m)")
+                    logger.info(f"   🎯 Zona determinada: {zone}")
+                    
+                    # Mostra qual lógica foi aplicada
+                    if x_pos < -0.8:
+                        logger.info(f"   📍 Lógica: LADO ESQUERDO (X < -0.8)")
+                    elif x_pos > 0.8:
+                        logger.info(f"   📍 Lógica: LADO DIREITO (X > 0.8)")
+                    else:
+                        logger.info(f"   📍 Lógica: CENTRO (-0.8 ≤ X ≤ 0.8)")
 
                     # Encontra ID da nossa lógica interna (igual Santa Cruz)
                     our_person_id = None
