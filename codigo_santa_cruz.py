@@ -99,42 +99,42 @@ class ZoneManager:
         # Configuração baseada no layout real do estande
         # Radar instalado no FUNDO do estande
         
-        # Limites das ativações (baseado no diagrama)
+        # Limites das ativações (baseado no diagrama) - AJUSTADOS para melhor detecção
         self.ZONA_CONFIGS = {
             # LADO ESQUERDO (X < -0.5)
             'SALA_REBOCO': {
-                'x_min': -3.0, 'x_max': -0.5,
-                'y_min': 0.5, 'y_max': 3.5,
-                'distance_range': (1.5, 3.0)
+                'x_min': -3.5, 'x_max': -0.3,
+                'y_min': 0.3, 'y_max': 3.8,
+                'distance_range': (1.0, 4.0)
             },
             'IGREJINHA': {
-                'x_min': -2.5, 'x_max': -0.3,
-                'y_min': 3.0, 'y_max': 5.5,
-                'distance_range': (3.0, 5.0)
+                'x_min': -3.0, 'x_max': -0.2,
+                'y_min': 2.8, 'y_max': 6.0,
+                'distance_range': (2.5, 6.0)
             },
             
-            # CENTRO (X entre -0.5 e 0.5)
+            # CENTRO (X entre -0.8 e 0.8)
             'CORETO': {
-                'x_min': -0.8, 'x_max': 0.8,
-                'y_min': 1.5, 'y_max': 4.0,
-                'distance_range': (1.5, 4.5)
+                'x_min': -1.0, 'x_max': 1.0,
+                'y_min': 1.0, 'y_max': 4.5,
+                'distance_range': (1.0, 5.0)
             },
             
             # LADO DIREITO (X > 0.5)
             'ARGOLA': {
-                'x_min': 0.5, 'x_max': 2.5,
-                'y_min': 4.5, 'y_max': 7.0,
-                'distance_range': (5.0, 7.5)
+                'x_min': 0.3, 'x_max': 3.0,
+                'y_min': 4.0, 'y_max': 7.5,
+                'distance_range': (4.0, 8.0)
             },
             'BEIJO': {
-                'x_min': 0.8, 'x_max': 3.0,
-                'y_min': 2.5, 'y_max': 5.0,
-                'distance_range': (4.5, 7.0)
+                'x_min': 0.5, 'x_max': 3.5,
+                'y_min': 2.0, 'y_max': 5.5,
+                'distance_range': (3.5, 7.5)
             },
             'PESCARIA': {
-                'x_min': 1.0, 'x_max': 3.5,
-                'y_min': 0.5, 'y_max': 3.5,
-                'distance_range': (5.5, 8.0)
+                'x_min': 0.8, 'x_max': 4.0,
+                'y_min': 0.2, 'y_max': 4.0,
+                'distance_range': (4.0, 9.0)
             }
         }
         
