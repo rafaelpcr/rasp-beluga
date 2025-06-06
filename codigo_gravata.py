@@ -91,30 +91,28 @@ class GoogleSheetsManager:
         self._setup_headers()
 
     def _setup_headers(self):
-        """Configura cabeçalhos específicos para Gravatá Dual (diferente do Santa Cruz)"""
+        """✅ Configura cabeçalhos IGUAL AO SANTA CRUZ (9 campos simplificados)"""
         try:
             headers = self.worksheet.row_values(1)
-            # Campos específicos para GRAVATÁ DUAL - mostra dados de cada área
+            # ✅ IGUAL AO SANTA CRUZ: Apenas campos ESSENCIAIS para contagem de pessoas
             expected_headers = [
-                'radar_id',           # ID do radar (EXTERNO/INTERNO)
+                'radar_id',           # ID do radar
                 'timestamp',          # Data/hora
-                'area_tipo',          # EXTERNA ou INTERNA
-                'person_count',       # Pessoas simultâneas nesta área
-                'person_id',          # ID da pessoa/grupo
-                'zone',               # Zona específica da área
+                'person_count',       # Pessoas simultâneas 
+                'person_id',          # ID da pessoa
+                'zone',               # Zona (PROXIMA/MEDIA/DISTANTE)
                 'distance',           # Distância (metros)
                 'confidence',         # Confiança da detecção (%)
-                'total_detected',     # Total acumulativo desta área
-                'max_simultaneous',   # Máximo simultâneo desta área
-                'area_status'         # Status da área (ATIVA/VAZIA)
+                'total_detected',     # Total acumulativo
+                'max_simultaneous'    # Máximo simultâneo
             ]
             
-            if not headers or len(headers) < 11:
-                logger.info("🔧 Configurando cabeçalhos Gravatá Dual (11 campos específicos)")
+            if not headers or len(headers) < 9:
+                logger.info("🔧 Configurando cabeçalhos simplificados (9 campos essenciais)")
                 self.worksheet.clear()
                 self.worksheet.append_row(expected_headers)
             else:
-                logger.info("✅ Cabeçalhos Gravatá Dual verificados")
+                logger.info("✅ Cabeçalhos simplificados verificados")
                     
         except Exception as e:
             logger.warning(f"⚠️ Erro ao configurar cabeçalhos: {e}")
@@ -130,7 +128,7 @@ class ZoneManager:
                 'AREA_INTERESSE': {
                     'x_min': -4.0, 'x_max': 4.0,
                     'y_min': 0.0, 'y_max': 8.0,
-                    'distance_range': (0.3, 4.0)  # Perto = área de interesse (aumentado para 4.0m)
+                    'distance_range': (0.3, 4.0)  # Perto = área de interesse
                 },
                 'AREA_PASSAGEM': {
                     'x_min': -4.0, 'x_max': 4.0,
@@ -139,8 +137,9 @@ class ZoneManager:
                 }
             }
         else:  # INTERNA
-            # Área interna: ativações específicas iguais ao Santa Cruz
+            # ✅ ÁREA INTERNA: IGUAL AO SANTA CRUZ (EXATAMENTE IGUAL)
             self.ZONA_CONFIGS = {
+                # LADO ESQUERDO (X < -0.5)
                 'SALA_REBOCO': {
                     'x_min': -3.5, 'x_max': -0.3,
                     'y_min': 0.3, 'y_max': 3.8,
@@ -151,11 +150,15 @@ class ZoneManager:
                     'y_min': 2.8, 'y_max': 6.0,
                     'distance_range': (2.5, 6.0)
                 },
+                
+                # CENTRO (X entre -0.8 e 0.8)
                 'CENTRO': {
                     'x_min': -1.0, 'x_max': 1.0,
                     'y_min': 1.0, 'y_max': 4.5,
                     'distance_range': (2.0, 5.0)
                 },
+                
+                # LADO DIREITO (X > 0.5)
                 'ARGOLA': {
                     'x_min': 0.3, 'x_max': 3.0,
                     'y_min': 4.0, 'y_max': 7.5,
@@ -174,7 +177,7 @@ class ZoneManager:
             }
         
     def get_zone(self, x, y):
-        """Determinar zona baseada na posição e tipo de área"""
+        """Determinar zona baseada EXATAMENTE igual ao Santa Cruz"""
         distance = self.get_distance(x, y)
         
         # Verifica cada zona baseada na posição X,Y e distância
@@ -184,15 +187,15 @@ class ZoneManager:
                 config['distance_range'][0] <= distance <= config['distance_range'][1]):
                 return zona_name
         
-        # Zonas de fallback baseadas na distância e área
+        # ✅ IGUAL AO SANTA CRUZ: Se não está em zona específica
         if self.area_tipo == 'EXTERNA':
-            # Área externa: apenas interesse vs passagem
+            # Área externa: fallback baseado na distância
             if distance <= 3.5:
                 return 'AREA_INTERESSE'
             else:
                 return 'AREA_PASSAGEM'
         else:  # INTERNA
-            # Área interna: igual ao Santa Cruz - se não está em ativação específica
+            # ✅ IGUAL AO SANTA CRUZ: Se não está em ativação específica
             return 'FORA_ATIVACOES'
     
     def get_distance(self, x, y):
@@ -206,7 +209,7 @@ class ZoneManager:
             # Área externa (2 zonas simples)
             'AREA_INTERESSE': 'Área de Interesse',
             'AREA_PASSAGEM': 'Área de Passagem',
-            # Área interna (ativações específicas iguais ao Santa Cruz)
+            # ✅ Área interna (IGUAL AO SANTA CRUZ)
             'SALA_REBOCO': 'Sala de Reboco',
             'IGREJINHA': 'Igrejinha', 
             'CENTRO': 'Centro',
@@ -234,7 +237,7 @@ class SingleRadarCounter:
         self.gsheets_manager = None
         self.zone_manager = ZoneManager(self.area_tipo)
         
-        # Sistema robusto de contagem de pessoas (igual ao codigo_sj1)
+        # Sistema robusto de contagem de pessoas (igual ao Santa Cruz)
         self.current_people = {}
         self.previous_people = {}
         self.people_history = {}
@@ -247,18 +250,15 @@ class SingleRadarCounter:
         self.reentry_timeout = 10.0
         self.last_update_time = time.time()
         
-        # Controle de escrita no Google Sheets (MAIS CONSERVADOR)
-        self.last_sheets_write = 0
-        self.sheets_write_interval = 60.0  # Aumentado para 60 segundos
-        self.pending_data = []
-        self.max_pending_lines = 5   # Reduzido para 5 linhas para evitar spam
-        self.min_interval_between_adds = 10.0  # Mínimo 10s entre adições ao buffer
+        # ✅ CONTROLE DE PLANILHA IGUAL AO SANTA CRUZ
+        self.last_sheets_write = 0              # Último envio para planilha
+        self.sheets_write_interval = 30.0       # ✅ IGUAL SANTA CRUZ: 30 segundos
+        self.pending_data = []                  # Buffer de dados pendentes
         
         # Estatísticas detalhadas
         self.entries_count = 0
         self.exits_count = 0
         self.unique_people_today = set()
-        self.last_data_add_time = 0  # Controle temporal para evitar spam
 
     def find_serial_port(self):
         """Detecta automaticamente a porta serial"""
@@ -578,11 +578,8 @@ class SingleRadarCounter:
         self.last_update_time = current_time
 
     def process_json_data(self, data_json):
-        """Processa dados JSON multi-pessoa v4.2 recebidos do radar"""
+        """Processa dados JSON IGUAL AO SANTA CRUZ com área específica"""
         try:
-            # DEBUG: Mostra dados brutos recebidos
-            logger.debug(f"JSON recebido ({self.area_tipo}): {data_json}")
-
             radar_id = data_json.get("radar_id", self.radar_id)
             timestamp_ms = data_json.get("timestamp_ms", 0)
             person_count = data_json.get("person_count", 0)
@@ -593,147 +590,185 @@ class SingleRadarCounter:
             # Atualiza contadores locais
             self.update_people_count(person_count, active_people)
 
-            # Limpa o terminal antes do display (igual Santa Cruz)
+            # ✅ LIMPA TERMINAL IGUAL AO SANTA CRUZ (apenas aqui)
             os.system('clear')
 
-            # Display em tempo real
+            # ✅ DISPLAY IGUAL AO SANTA CRUZ + área específica
             print(f"\n{self.color} ═══ GRAVATÁ {self.area_tipo} - TRACKING AVANÇADO ═══")
             print(f"⏰ {formatted_timestamp}")
             print(f"📡 {radar_id} | 👥 ATIVAS: {person_count}")
-            print(f"🎯 TOTAL {self.area_tipo}: {self.total_people_detected} | 📊 MÁXIMO: {self.max_simultaneous_people}")
+            print(f"🎯 TOTAL DETECTADAS: {self.total_people_detected} | 📊 MÁXIMO SIMULTÂNEO: {self.max_simultaneous_people}")
             print(f"🔄 ENTRADAS: {self.entries_count} | 🚪 SAÍDAS: {self.exits_count}")
+            print(f"🆔 PESSOAS ÚNICAS: {len(self.unique_people_today)}")
+
+            # Mostra duração da sessão (igual Santa Cruz)
+            session_duration = datetime.now() - self.session_start_time
+            duration_str = self.format_duration(session_duration.total_seconds() * 1000)
+            print(f"⏱️ SESSÃO: {duration_str}")
+
+            # ✅ STATUS DO ENVIO IGUAL AO SANTA CRUZ
+            pending_count = len(self.pending_data)
+            time_since_last_send = time.time() - self.last_sheets_write
+            next_send_in = max(0, self.sheets_write_interval - time_since_last_send)
+            if pending_count > 0:
+                print(f"📋 BUFFER: {pending_count} linhas | ⏳ Próximo envio em: {next_send_in:.0f}s")
+            else:
+                print(f"📋 PLANILHA: Sincronizada ✅")
 
             if active_people and len(active_people) > 0:
-                print(f"\n👥 PESSOAS NA ÁREA {self.area_tipo} ({len(active_people)}):")
-                print(f"{'Zona':<20} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8}")
-                print("-" * 55)
+                # ✅ TABELA IGUAL AO SANTA CRUZ
+                print(f"\n👥 PESSOAS DETECTADAS AGORA ({len(active_people)}):")
+                if self.area_tipo == 'INTERNA':
+                    print(f"{'Ativação':<15} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
+                else:
+                    print(f"{'Zona':<15} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
+                print("-" * 65)
 
                 current_time = time.time()
                 for i, person in enumerate(active_people):
                     confidence = person.get("confidence", 0)
-                    # Corrigir: usar distance_smoothed OU distance_raw
                     distance_smoothed = person.get("distance_smoothed", person.get("distance_raw", 0))
                     x_pos = person.get("x_pos", 0)
                     y_pos = person.get("y_pos", 0)
                     stationary = person.get("stationary", False)
 
-                    # ✅ CALCULA ZONA ESPECÍFICA DA ÁREA usando coordenadas x,y
+                    # ✅ CALCULA ZONA IGUAL AO SANTA CRUZ
                     zone = self.zone_manager.get_zone(x_pos, y_pos)
                     person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
+
+                    # Encontra ID da nossa lógica interna (igual Santa Cruz)
+                    our_person_id = None
+                    for internal_id, internal_person in self.current_people.items():
+                        if (abs(internal_person.get('distance_smoothed', 0) - distance_smoothed) < 0.1 and
+                            internal_person.get('zone', '') == zone):
+                            our_person_id = internal_id
+                            break
+
+                    # Calcula tempo desde primeira detecção (nossa lógica)
+                    if our_person_id and our_person_id in self.current_people:
+                        first_seen = self.current_people[our_person_id].get('first_seen', current_time)
+                        time_in_area = current_time - first_seen
+                        time_str = f"{time_in_area:.0f}s" if time_in_area < 60 else f"{time_in_area/60:.1f}m"
+                    else:
+                        time_str = "novo"
 
                     status = "Parado" if stationary else "Móvel"
                     pos_str = f"{x_pos:.1f},{y_pos:.1f}"
 
-                    zone_desc = self.zone_manager.get_zone_description(zone)[:19]
-                    print(f"{zone_desc:<20} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8}")
+                    zone_desc = self.zone_manager.get_zone_description(zone)[:14]
+                    print(f"{zone_desc:<15} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
 
-                # Envia dados para planilha (formato específico Gravatá) - COM CONTROLE TEMPORAL
+                # ✅ ENVIA DADOS IGUAL AO SANTA CRUZ (formato de 9 campos)
                 if self.gsheets_manager:
-                    current_time = time.time()
+                    # Calcula dados agregados
+                    avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
+                    # ✅ COLETA ZONAS JÁ CORRIGIDAS (calculadas pelo ZoneManager)
+                    zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
+                    zones_str = ",".join(sorted(zones_detected))
 
-                    # EVITA SPAM: Só adiciona se passou tempo suficiente desde última adição
-                    if (current_time - self.last_data_add_time) >= self.min_interval_between_adds:
-                        avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
-                        zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
-                        zones_str = ",".join(sorted(zones_detected))
-
-                        if len(active_people) == 1:
-                            person_description = f"Pessoa_{self.area_tipo}"
-                        elif len(active_people) <= 3:
-                            person_description = f"Grupo_Pequeno_{self.area_tipo}"
-                        elif len(active_people) <= 10:
-                            person_description = f"Grupo_Medio_{self.area_tipo}"
-                        else:
-                            person_description = f"Grupo_Grande_{self.area_tipo}"
-
-                        # Corrigir: usar distance_smoothed OU distance_raw
-                        avg_distance = sum(p.get('distance_smoothed', p.get('distance_raw', 0)) for p in active_people) / len(active_people)
-
-                        row = [
-                            radar_id,                                    # 1. radar_id
-                            formatted_timestamp,                         # 2. timestamp  
-                            self.area_tipo,                             # 3. area_tipo (EXTERNA/INTERNA)
-                            len(active_people),                         # 4. person_count
-                            person_description,                         # 5. person_id
-                            zones_str,                                  # 6. zone
-                            f"{avg_distance:.1f}",                      # 7. distance
-                            f"{avg_confidence:.0f}",                    # 8. confidence
-                            self.total_people_detected,                 # 9. total_detected
-                            self.max_simultaneous_people,               # 10. max_simultaneous
-                            'ATIVA'                                     # 11. area_status
-                        ]
-                        self.pending_data.append(row)
-                        self.last_data_add_time = current_time
-                        logger.info(f"📊 Dados {self.area_tipo} adicionados ao buffer ({len(self.pending_data)}/5)")
+                    # ID mais profissional baseado no contexto (igual Santa Cruz)
+                    if len(active_people) == 1:
+                        person_description = "Pessoa Individual"
+                    elif len(active_people) <= 3:
+                        person_description = "Grupo Pequeno"
+                    elif len(active_people) <= 10:
+                        person_description = "Grupo Médio"
+                    elif len(active_people) <= 20:
+                        person_description = "Grupo Grande"
                     else:
-                        time_remaining = self.min_interval_between_adds - (current_time - self.last_data_add_time)
-                        logger.debug(f"⏳ {self.area_tipo}: Aguardando {time_remaining:.1f}s para próxima adição")
+                        person_description = "Multidão"
 
-                print(f"\n💡 ÁREA {self.area_tipo}: {len(active_people)} pessoa(s) ATIVAS")
+                    # ✅ FORMATO SANTA CRUZ (9 campos) + radar_id modificado para área
+                    row = [
+                        f"{radar_id}_{self.area_tipo}",    # 1. radar_id (com área)
+                        formatted_timestamp,               # 2. timestamp
+                        len(active_people),                # 3. person_count (real detectadas agora)
+                        person_description,                # 4. person_id (descrição profissional)
+                        zones_str,                         # 5. zone (todas as zonas ordenadas)
+                        f"{sum(p.get('distance_smoothed', p.get('distance_raw', 0)) for p in active_people) / len(active_people):.1f}",  # 6. distance (média)
+                        f"{avg_confidence:.0f}",           # 7. confidence (média)
+                        self.total_people_detected,        # 8. total_detected (nossa contagem real)
+                        self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
+                    ]
+                    self.pending_data.append(row)
+
+                print(f"\n💡 DETECTANDO {len(active_people)} pessoa(s) SIMULTANEAMENTE")
+
+                # ✅ ESTATÍSTICAS POR ZONA IGUAL AO SANTA CRUZ
+                zone_stats = {}
+                high_confidence = 0
+                for person in active_people:
+                    zone = person.get("zone", "N/A")  # Zona já foi corrigida acima
+                    zone_stats[zone] = zone_stats.get(zone, 0) + 1
+                    if person.get("confidence", 0) >= 70:
+                        high_confidence += 1
+
+                if zone_stats:
+                    if self.area_tipo == 'INTERNA':
+                        print("📊 DISTRIBUIÇÃO POR ATIVAÇÃO:")
+                    else:
+                        print("📊 DISTRIBUIÇÃO POR ZONA:")
+                    for zone, count in zone_stats.items():
+                        zone_desc = self.zone_manager.get_zone_description(zone)
+                        print(f"   • {zone_desc}: {count} pessoa(s)")
+                    print()
+
+                print(f"✅ QUALIDADE: {high_confidence}/{len(active_people)} com alta confiança (≥70%)")
 
             else:
-                print(f"\n👻 Área {self.area_tipo} vazia no momento.")
+                print(f"\n👻 Nenhuma pessoa detectada no momento.")
 
-                # Dados zerados para área vazia - COM CONTROLE TEMPORAL
+                # ✅ ENVIA DADOS ZERADOS IGUAL AO SANTA CRUZ
                 if self.gsheets_manager and len(self.previous_people) > 0:
-                    current_time = time.time()
+                    row = [
+                        f"{radar_id}_{self.area_tipo}",    # 1. radar_id (com área)
+                        formatted_timestamp,               # 2. timestamp
+                        0,                                 # 3. person_count (zero)
+                        "Area_Vazia",                      # 4. person_id (indicador)
+                        "VAZIA",                           # 5. zone 
+                        "0",                               # 6. distance
+                        "0",                               # 7. confidence
+                        self.total_people_detected,        # 8. total_detected (nossa contagem real)
+                        self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
+                    ]
+                    self.pending_data.append(row)
 
-                    # EVITA SPAM de status vazio: Só adiciona se passou tempo suficiente
-                    if (current_time - self.last_data_add_time) >= self.min_interval_between_adds:
-                        row = [
-                            radar_id,                           # 1. radar_id
-                            formatted_timestamp,                # 2. timestamp
-                            self.area_tipo,                    # 3. area_tipo
-                            0,                                 # 4. person_count
-                            f"Vazia_{self.area_tipo}",         # 5. person_id
-                            "VAZIA",                           # 6. zone
-                            "0",                               # 7. distance
-                            "0",                               # 8. confidence
-                            self.total_people_detected,        # 9. total_detected
-                            self.max_simultaneous_people,      # 10. max_simultaneous
-                            'VAZIA'                            # 11. area_status
-                        ]
-                        self.pending_data.append(row)
-                        self.last_data_add_time = current_time
-                        logger.info(f"📊 Status VAZIA {self.area_tipo} adicionado ao buffer")
+            print("\n" + "═" * 60)
+            print("🎯 SISTEMA ROBUSTO: Detecta entradas/saídas precisamente")
+            print("⚡ Pressione Ctrl+C para encerrar | Tracking Avançado Ativo")
 
-            print("=" * 60)
-
-            # Envia dados controladamente
+            # ✅ ENVIA DADOS IGUAL AO SANTA CRUZ
             self.send_pending_data_to_sheets()
 
         except Exception as e:
             logger.error(f"Erro ao processar dados JSON {self.area_tipo}: {e}")
 
     def send_pending_data_to_sheets(self):
-        """Envia dados para Google Sheets de forma controlada (IGUAL AO SANTA CRUZ)"""
+        """✅ ENVIA DADOS IGUAL AO SANTA CRUZ (30s, 10 linhas máx, 0.5s entre linhas)"""
         try:
             current_time = time.time()
             
-            # Verifica se já passou tempo suficiente desde último envio OU se tem 5+ linhas
-            time_to_send = (current_time - self.last_sheets_write) >= self.sheets_write_interval
-            buffer_full = len(self.pending_data) >= self.max_pending_lines
-            
-            if not time_to_send and not buffer_full:
+            # ✅ IGUAL SANTA CRUZ: Verifica se já passou tempo suficiente
+            if (current_time - self.last_sheets_write) < self.sheets_write_interval:
                 return  # Ainda não é hora de enviar
             
             # Se não há dados pendentes, não faz nada
             if not self.pending_data or not self.gsheets_manager:
                 return
             
-            # Pega apenas os dados mais recentes (máximo 5 linhas por vez)
-            data_to_send = self.pending_data[-self.max_pending_lines:] if len(self.pending_data) > self.max_pending_lines else self.pending_data
+            # ✅ IGUAL SANTA CRUZ: Pega apenas os dados mais recentes (máximo 10 linhas por vez)
+            data_to_send = self.pending_data[-10:] if len(self.pending_data) > 10 else self.pending_data
             
-            # Envia em lote (mais eficiente)
+            # ✅ IGUAL SANTA CRUZ: Envia em lote
             if data_to_send:
-                logger.info(f"📊 Enviando {len(data_to_send)} linhas {self.area_tipo} para planilha...")
+                logger.info(f"📊 Enviando {len(data_to_send)} linhas {self.area_tipo} para Google Sheets...")
                 
-                # Envia todas as linhas de uma vez (batch) - COM PAUSA MAIOR
+                # ✅ IGUAL SANTA CRUZ: Envia todas as linhas de uma vez (batch)
                 for row in data_to_send:
                     self.gsheets_manager.worksheet.append_row(row)
-                    time.sleep(2.0)  # Pausa de 2 segundos entre linhas para evitar sobrecarga
+                    time.sleep(0.5)  # ✅ IGUAL SANTA CRUZ: 0.5s entre linhas
                 
-                logger.info(f"✅ {len(data_to_send)} linhas {self.area_tipo} enviadas!")
+                logger.info(f"✅ {len(data_to_send)} linhas {self.area_tipo} enviadas com sucesso!")
                 
                 # Atualiza controles
                 self.last_sheets_write = current_time
@@ -741,10 +776,10 @@ class SingleRadarCounter:
                 
         except Exception as e:
             logger.error(f"❌ Erro ao enviar dados {self.area_tipo}: {e}")
-            # Em caso de erro, mantém dados para próxima tentativa
+            # ✅ IGUAL SANTA CRUZ: Em caso de erro, mantém dados para próxima tentativa
             if "quota" in str(e).lower() or "429" in str(e):
                 logger.warning("⚠️ Quota excedida - aumentando intervalo para 60s")
-                self.sheets_write_interval = 60.0  # Aumenta intervalo se quota excedida
+                self.sheets_write_interval = 60.0
 
     def get_current_count(self):
         return len(self.current_people)
@@ -919,27 +954,10 @@ def list_available_ports():
     print("\n" + "=" * 60)
     return [port.device for port in ports]
 
-def print_dual_status(radar_interna, radar_externa):
-    """Exibe status das duas áreas lado a lado no terminal"""
-    os.system('clear')
-    status_int = radar_interna.get_status()
-    status_ext = radar_externa.get_status()
-    
-    print(f"{'🔵 GRAVATÁ INTERNA':<40} | {'🔴 GRAVATÁ EXTERNA':<40}")
-    print(f"{'='*38:<40} | {'='*38:<40}")
-    print(f"{status_int['timestamp'] if 'timestamp' in status_int else '':<40} | {status_ext['timestamp'] if 'timestamp' in status_ext else '' :<40}")
-    print(f"{status_int['id']} | 👥 {status_int['current_count']} ativas{'':<24} | {status_ext['id']} | 👥 {status_ext['current_count']} ativas")
-    print(f"Entradas: {status_int['entries_count']} | Saídas: {status_int['exits_count']:<10} | Entradas: {status_ext['entries_count']} | Saídas: {status_ext['exits_count']}")
-    print(f"Total: {status_int['total_detected']} | Máx: {status_int['max_simultaneous']:<12} | Total: {status_ext['total_detected']} | Máx: {status_ext['max_simultaneous']}")
-    print(f"{'='*38:<40} | {'='*38:<40}")
-    print()
-    print(f"Debug interna: {status_int.get('last_debug', '')}")
-    print(f"Debug externa: {status_ext.get('last_debug', '')}")
-    print()
 
 def main():
     """Função principal do sistema dual radar Gravatá"""
-    logger.info("🚀 Inicializando Sistema DUAL RADAR GRAVATÁ (painel duplo)...")
+    logger.info("🚀 Inicializando Sistema DUAL RADAR GRAVATÁ...")
     available_ports = list_available_ports()
     if len(available_ports) < 2:
         logger.error("❌ Sistema dual necessita 2 portas seriais!")
@@ -953,20 +971,52 @@ def main():
         if not system.start():
             logger.error("❌ Falha ao iniciar sistema")
             return
-        radar_interna = None
-        radar_externa = None
-        for radar in system.radars:
-            if radar.area_tipo == 'INTERNA':
-                radar_interna = radar
-            elif radar.area_tipo == 'EXTERNA':
-                radar_externa = radar
-        if not radar_interna or not radar_externa:
-            logger.error("❌ Não encontrou ambos radares INTERNA e EXTERNA!")
-            return
-        # Loop principal
+        
+        # Exibe status inicial
+        logger.info("=" * 80)
+        logger.info("👥 CONTADOR DUAL GRAVATÁ - SISTEMA ESP32 v4.2 AVANÇADO")
+        logger.info("=" * 80)
+        logger.info("🚀 Sistema CORRIGIDO v4.3 - Tracking Preciso para Eventos:")
+        logger.info("   • Duas áreas simultâneas (EXTERNA + INTERNA)")
+        logger.info("   • Lógica baseada em POSIÇÃO REAL (não IDs do Arduino)")
+        logger.info("   • Detecção precisa de entrada/saída por zona")
+        logger.info("   • Pessoas paradas contam apenas UMA vez")
+        logger.info("   • Anti-flickering: evita contagem duplicada")
+        logger.info("   • Ideal para eventos com muitas pessoas")
+        logger.info("   • Tracking por zona + distância + posição")
+        logger.info("⚡ Sistema ativo - Dados sendo enviados para Google Sheets")
+        logger.info("🔄 Reconexão automática habilitada")
+        logger.info("=" * 80)
+
+        # ✅ LOOP PRINCIPAL IGUAL AO SANTA CRUZ
+        status_counter = 0
         while True:
-            print_dual_status(radar_interna, radar_externa)
-            time.sleep(2)
+            time.sleep(5)  # ✅ IGUAL SANTA CRUZ: sleep(5)
+            status_counter += 1
+            
+            # ✅ IGUAL SANTA CRUZ: Status a cada 30 segundos (6 * 5s = 30s)
+            if status_counter >= 6:
+                status_counter = 0
+                status = system.get_status()
+                
+                # Status consolidado das duas áreas
+                total_current = sum(r['current_count'] for r in status['radars'])
+                total_detected = sum(r['total_detected'] for r in status['radars'])
+                total_entries = sum(r['entries_count'] for r in status['radars'])
+                total_exits = sum(r['exits_count'] for r in status['radars'])
+                max_simultaneous = max(r['max_simultaneous'] for r in status['radars'])
+                
+                logger.info(f"📊 STATUS GRAVATÁ: {total_current} ativas | {total_detected} total | {total_entries} entradas | {total_exits} saídas | Máx: {max_simultaneous}")
+                
+                # Status individual por área
+                for radar in status['radars']:
+                    area = radar['area_tipo']
+                    if radar['running'] and radar['connected']:
+                        logger.info(f"   🔹 {area}: {radar['current_count']} ativas | {radar['total_detected']} total")
+                    elif radar['running']:
+                        logger.warning(f"   ⚠️ {area}: rodando mas conexão perdida")
+                    else:
+                        logger.warning(f"   ⚠️ {area}: não está ativo")
     except KeyboardInterrupt:
         logger.info("🛑 Encerrando por solicitação do usuário...")
     except Exception as e:
