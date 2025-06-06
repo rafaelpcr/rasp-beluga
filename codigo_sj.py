@@ -96,24 +96,89 @@ class GoogleSheetsManager:
 
 class ZoneManager:
     def __init__(self):
-        self.ZONE_1_DISTANCE = 2.0  # Zona próxima
-        self.ZONE_2_DISTANCE = 4.0  # Zona média
+        # Configuração baseada no layout real do estande
+        # Radar instalado no FUNDO do estande
+        
+        # Limites das ativações (baseado no diagrama)
+        self.ZONA_CONFIGS = {
+            # LADO ESQUERDO (X < -0.5)
+            'SALA_REBOCO': {
+                'x_min': -3.0, 'x_max': -0.5,
+                'y_min': 0.5, 'y_max': 3.5,
+                'distance_range': (1.5, 3.0)
+            },
+            'IGREJINHA': {
+                'x_min': -2.5, 'x_max': -0.3,
+                'y_min': 3.0, 'y_max': 5.5,
+                'distance_range': (3.0, 5.0)
+            },
+            
+            # CENTRO (X entre -0.5 e 0.5)
+            'CORETO': {
+                'x_min': -0.8, 'x_max': 0.8,
+                'y_min': 1.5, 'y_max': 4.0,
+                'distance_range': (1.5, 4.5)
+            },
+            
+            # LADO DIREITO (X > 0.5)
+            'ARGOLA': {
+                'x_min': 0.5, 'x_max': 2.5,
+                'y_min': 4.5, 'y_max': 7.0,
+                'distance_range': (5.0, 7.5)
+            },
+            'BEIJO': {
+                'x_min': 0.8, 'x_max': 3.0,
+                'y_min': 2.5, 'y_max': 5.0,
+                'distance_range': (4.5, 7.0)
+            },
+            'PESCARIA': {
+                'x_min': 1.0, 'x_max': 3.5,
+                'y_min': 0.5, 'y_max': 3.5,
+                'distance_range': (5.5, 8.0)
+            }
+        }
         
     def get_zone(self, x, y):
-        """Determinar zona baseada na distância"""
+        """Determinar zona baseada na posição real das ativações"""
         distance = self.get_distance(x, y)
         
-        if distance <= self.ZONE_1_DISTANCE:
-            return 'PROXIMA'
-        elif distance <= self.ZONE_2_DISTANCE:
-            return 'MEDIA'
+        # Verifica cada ativação baseada na posição X,Y e distância
+        for zona_name, config in self.ZONA_CONFIGS.items():
+            if (config['x_min'] <= x <= config['x_max'] and
+                config['y_min'] <= y <= config['y_max'] and
+                config['distance_range'][0] <= distance <= config['distance_range'][1]):
+                return zona_name
+        
+        # Zonas de fallback baseadas apenas na distância
+        if distance <= 2.0:
+            return 'ENTRADA'  # Muito próximo do radar
+        elif distance <= 4.0:
+            return 'CENTRO_LIVRE'  # Centro do estande
+        elif distance <= 7.0:
+            return 'ATIVACAO_GERAL'  # Área geral das ativações
         else:
-            return 'DISTANTE'
+            return 'FORA_ESTANDE'  # Fora do alcance útil
     
     def get_distance(self, x, y):
         """Calcular distância do radar"""
         import math
         return math.sqrt(x**2 + y**2)
+    
+    def get_zone_description(self, zone_name):
+        """Retorna descrição amigável da zona"""
+        descriptions = {
+            'SALA_REBOCO': 'Sala de Reboco (Esquerda)',
+            'IGREJINHA': 'Igrejinha (Esquerda)',
+            'CORETO': 'Coreto Central',
+            'ARGOLA': 'Jogo da Argola (Direita)',
+            'BEIJO': 'Barraca do Beijo (Direita)',
+            'PESCARIA': 'Pescaria (Direita)',
+            'ENTRADA': 'Entrada do Estande',
+            'CENTRO_LIVRE': 'Centro Livre',
+            'ATIVACAO_GERAL': 'Área de Ativações',
+            'FORA_ESTANDE': 'Fora do Estande'
+        }
+        return descriptions.get(zone_name, zone_name)
 
 class SingleRadarCounter:
     def __init__(self, config):
@@ -533,8 +598,8 @@ class SingleRadarCounter:
             
             if active_people and len(active_people) > 0:
                 print(f"\n👥 PESSOAS DETECTADAS AGORA ({len(active_people)}):")
-                print(f"{'Zona':<8} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
-                print("-" * 55)
+                print(f"{'Ativação':<15} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
+                print("-" * 65)
                 
                 current_time = time.time()
                 for i, person in enumerate(active_people):
@@ -565,7 +630,8 @@ class SingleRadarCounter:
                     status = "Parado" if stationary else "Móvel"
                     pos_str = f"{x_pos:.1f},{y_pos:.1f}"
                     
-                    print(f"{zone:<8} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
+                    zone_desc = self.zone_manager.get_zone_description(zone)[:14]  # Trunca para caber
+                    print(f"{zone_desc:<15} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
                 
                 # Envia APENAS UM resumo por ciclo (não uma linha por pessoa)
                 if self.gsheets_manager:
@@ -611,9 +677,10 @@ class SingleRadarCounter:
                         high_confidence += 1
                 
                 if zone_stats:
-                    print("📊 DISTRIBUIÇÃO POR ZONA:", end=" ")
+                    print("📊 DISTRIBUIÇÃO POR ATIVAÇÃO:")
                     for zone, count in zone_stats.items():
-                        print(f"{zone}: {count}", end="  ")
+                        zone_desc = self.zone_manager.get_zone_description(zone)
+                        print(f"   • {zone_desc}: {count} pessoa(s)")
                     print()
                 
                 print(f"✅ QUALIDADE: {high_confidence}/{len(active_people)} com alta confiança (≥70%)")
