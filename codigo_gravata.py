@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 # Configuração básica de logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # ✅ TEMPORÁRIO: Debug ativo para diagnóstico
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('gravata_dual_radar.log'),
@@ -137,66 +137,94 @@ class ZoneManager:
                 }
             }
         else:  # INTERNA
-            # ✅ ÁREA INTERNA: IGUAL AO SANTA CRUZ (EXATAMENTE IGUAL)
+            # ✅ ÁREA INTERNA: CORRIGIDA para capturar distâncias menores
             self.ZONA_CONFIGS = {
-                # LADO ESQUERDO (X < -0.5)
-                'SALA_REBOCO': {
-                    'x_min': -3.5, 'x_max': -0.3,
-                    'y_min': 0.3, 'y_max': 3.8,
-                    'distance_range': (1.0, 4.0)
-                },
-                'IGREJINHA': {
-                    'x_min': -3.0, 'x_max': -0.2,
-                    'y_min': 2.8, 'y_max': 6.0,
-                    'distance_range': (2.5, 6.0)
+                # CENTRO - zona principal para distâncias próximas
+                'CENTRO': {
+                    'x_min': -2.0, 'x_max': 2.0,
+                    'y_min': 0.5, 'y_max': 3.0,
+                    'distance_range': (0.5, 3.0)  # ✅ Incluindo distâncias pequenas
                 },
                 
-                # CENTRO (X entre -0.8 e 0.8)
-                'CENTRO': {
-                    'x_min': -1.0, 'x_max': 1.0,
-                    'y_min': 1.0, 'y_max': 4.5,
-                    'distance_range': (2.0, 5.0)
+                # LADO ESQUERDO (X < -0.5)
+                'SALA_REBOCO': {
+                    'x_min': -3.5, 'x_max': -0.5,
+                    'y_min': 0.5, 'y_max': 3.5,
+                    'distance_range': (0.8, 4.0)  # ✅ Distâncias menores
+                },
+                'IGREJINHA': {
+                    'x_min': -3.0, 'x_max': -0.5,
+                    'y_min': 2.5, 'y_max': 5.5,
+                    'distance_range': (1.5, 6.0)
                 },
                 
                 # LADO DIREITO (X > 0.5)
-                'ARGOLA': {
-                    'x_min': 0.3, 'x_max': 3.0,
-                    'y_min': 4.0, 'y_max': 7.5,
-                    'distance_range': (4.0, 8.0)
-                },
                 'BEIJO': {
-                    'x_min': 0.5, 'x_max': 3.5,
-                    'y_min': 2.0, 'y_max': 5.5,
-                    'distance_range': (3.5, 7.5)
+                    'x_min': 0.5, 'x_max': 3.0,
+                    'y_min': 1.0, 'y_max': 4.0,
+                    'distance_range': (1.0, 5.0)  # ✅ Distâncias menores
+                },
+                'ARGOLA': {
+                    'x_min': 0.5, 'x_max': 3.0,
+                    'y_min': 3.5, 'y_max': 6.5,
+                    'distance_range': (3.0, 7.0)
                 },
                 'PESCARIA': {
-                    'x_min': 0.8, 'x_max': 4.0,
-                    'y_min': 0.2, 'y_max': 4.0,
-                    'distance_range': (4.0, 9.0)
+                    'x_min': 1.0, 'x_max': 4.0,
+                    'y_min': 0.5, 'y_max': 3.0,
+                    'distance_range': (2.0, 6.0)
                 }
             }
         
     def get_zone(self, x, y):
-        """Determinar zona baseada EXATAMENTE igual ao Santa Cruz"""
+        """Determinar zona CORRIGIDA - prioriza distância para área interna"""
         distance = self.get_distance(x, y)
         
-        # Verifica cada zona baseada na posição X,Y e distância
-        for zona_name, config in self.ZONA_CONFIGS.items():
-            if (config['x_min'] <= x <= config['x_max'] and
-                config['y_min'] <= y <= config['y_max'] and
-                config['distance_range'][0] <= distance <= config['distance_range'][1]):
-                return zona_name
-        
-        # ✅ IGUAL AO SANTA CRUZ: Se não está em zona específica
         if self.area_tipo == 'EXTERNA':
-            # Área externa: fallback baseado na distância
+            # Área externa: verifica posição e distância
+            for zona_name, config in self.ZONA_CONFIGS.items():
+                if (config['x_min'] <= x <= config['x_max'] and
+                    config['y_min'] <= y <= config['y_max'] and
+                    config['distance_range'][0] <= distance <= config['distance_range'][1]):
+                    return zona_name
+            
+            # Fallback baseado na distância
             if distance <= 3.5:
                 return 'AREA_INTERESSE'
             else:
                 return 'AREA_PASSAGEM'
-        else:  # INTERNA
-            # ✅ IGUAL AO SANTA CRUZ: Se não está em ativação específica
-            return 'FORA_ATIVACOES'
+        
+        else:  # INTERNA - LÓGICA CORRIGIDA
+            # ✅ PRIMEIRO: Tenta baseado na distância E posição
+            for zona_name, config in self.ZONA_CONFIGS.items():
+                if (config['x_min'] <= x <= config['x_max'] and
+                    config['y_min'] <= y <= config['y_max'] and
+                    config['distance_range'][0] <= distance <= config['distance_range'][1]):
+                    return zona_name
+            
+            # ✅ SEGUNDO: Se não encontrou, usa APENAS a distância
+            if distance <= 1.5:
+                return 'CENTRO'  # Distâncias muito próximas = centro
+            elif distance <= 3.0:
+                # Baseado na posição X para decidir lado
+                if x < -0.5:
+                    return 'SALA_REBOCO'
+                elif x > 0.5:
+                    return 'BEIJO'
+                else:
+                    return 'CENTRO'
+            elif distance <= 5.0:
+                # Distâncias médias
+                if x < -0.5:
+                    return 'IGREJINHA'
+                elif x > 0.5:
+                    return 'PESCARIA'
+                else:
+                    return 'CENTRO'
+            elif distance <= 7.0:
+                return 'ARGOLA'  # Distâncias maiores
+            else:
+                return 'FORA_ATIVACOES'
     
     def get_distance(self, x, y):
         """Calcular distância do radar"""
@@ -632,13 +660,13 @@ class SingleRadarCounter:
                 print(f"📋 PLANILHA: Sincronizada ✅")
 
             if active_people and len(active_people) > 0:
-                # ✅ TABELA IGUAL AO SANTA CRUZ
+                # ✅ TABELA COM DEBUG DE COORDENADAS
                 print(f"\n👥 PESSOAS DETECTADAS AGORA ({len(active_people)}):")
                 if self.area_tipo == 'INTERNA':
-                    print(f"{'Ativação':<15} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
+                    print(f"{'Ativação':<15} {'Dist(m)':<7} {'X,Y':<12} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
                 else:
-                    print(f"{'Zona':<15} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
-                print("-" * 65)
+                    print(f"{'Zona':<15} {'Dist(m)':<7} {'X,Y':<12} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
+                print("-" * 70)
 
                 current_time = time.time()
                 for i, person in enumerate(active_people):
@@ -648,9 +676,12 @@ class SingleRadarCounter:
                     y_pos = person.get("y_pos", 0)
                     stationary = person.get("stationary", False)
 
-                    # ✅ CALCULA ZONA IGUAL AO SANTA CRUZ
+                    # ✅ CALCULA ZONA CORRIGIDA (com debug)
                     zone = self.zone_manager.get_zone(x_pos, y_pos)
                     person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
+
+                    # 🔍DEBUG: Mostra cálculo da zona
+                    logger.debug(f"🔍 DEBUG ZONA {self.area_tipo}: X={x_pos:.2f}, Y={y_pos:.2f}, Dist={distance_smoothed:.2f}m → {zone}")
 
                     # Encontra ID da nossa lógica interna (igual Santa Cruz)
                     our_person_id = None
@@ -669,10 +700,10 @@ class SingleRadarCounter:
                         time_str = "novo"
 
                     status = "Parado" if stationary else "Móvel"
-                    pos_str = f"{x_pos:.1f},{y_pos:.1f}"
+                    pos_str = f"{x_pos:.2f},{y_pos:.2f}"  # ✅ Mais precisão nas coordenadas
 
                     zone_desc = self.zone_manager.get_zone_description(zone)[:14]
-                    print(f"{zone_desc:<15} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
+                    print(f"{zone_desc:<15} {distance_smoothed:<7.2f} {pos_str:<12} {confidence:<5}% {status:<8} {time_str:<8}")
 
                 # ✅ ENVIA DADOS IGUAL AO SANTA CRUZ (formato de 9 campos)
                 if self.gsheets_manager:
