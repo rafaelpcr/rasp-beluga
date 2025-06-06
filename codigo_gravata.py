@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+"""
+Sistema DUAL RADAR - GRAVATÁ
+Baseado 100% no codigo_sj1.py com sistema robusto de tracking
+Duas áreas (interna + externa) → MESMA PLANILHA
+"""
+
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -123,12 +130,12 @@ class ZoneManager:
                 'AREA_INTERESSE': {
                     'x_min': -4.0, 'x_max': 4.0,
                     'y_min': 0.0, 'y_max': 8.0,
-                    'distance_range': (0.3, 3.5)  # Perto = área de interesse
+                    'distance_range': (0.3, 4.0)  # Perto = área de interesse (aumentado para 4.0m)
                 },
                 'AREA_PASSAGEM': {
                     'x_min': -4.0, 'x_max': 4.0,
                     'y_min': 0.0, 'y_max': 8.0,
-                    'distance_range': (3.5, 8.0)  # Afastado = área de passagem
+                    'distance_range': (4.0, 8.0)  # Afastado = área de passagem
                 }
             }
         else:  # INTERNA
@@ -573,56 +580,63 @@ class SingleRadarCounter:
     def process_json_data(self, data_json):
         """Processa dados JSON multi-pessoa v4.2 recebidos do radar"""
         try:
+            # DEBUG: Mostra dados brutos recebidos
+            logger.debug(f"JSON recebido ({self.area_tipo}): {data_json}")
+
             radar_id = data_json.get("radar_id", self.radar_id)
             timestamp_ms = data_json.get("timestamp_ms", 0)
             person_count = data_json.get("person_count", 0)
             active_people = data_json.get("active_people", [])
-            
+
             formatted_timestamp = self.convert_timestamp(timestamp_ms)
-            
+
             # Atualiza contadores locais
             self.update_people_count(person_count, active_people)
-            
+
+            # Limpa o terminal antes do display (igual Santa Cruz)
+            os.system('clear')
+
             # Display em tempo real
             print(f"\n{self.color} ═══ GRAVATÁ {self.area_tipo} - TRACKING AVANÇADO ═══")
             print(f"⏰ {formatted_timestamp}")
             print(f"📡 {radar_id} | 👥 ATIVAS: {person_count}")
             print(f"🎯 TOTAL {self.area_tipo}: {self.total_people_detected} | 📊 MÁXIMO: {self.max_simultaneous_people}")
             print(f"🔄 ENTRADAS: {self.entries_count} | 🚪 SAÍDAS: {self.exits_count}")
-            
+
             if active_people and len(active_people) > 0:
                 print(f"\n👥 PESSOAS NA ÁREA {self.area_tipo} ({len(active_people)}):")
                 print(f"{'Zona':<20} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8}")
                 print("-" * 55)
-                
+
                 current_time = time.time()
                 for i, person in enumerate(active_people):
                     confidence = person.get("confidence", 0)
-                    distance_smoothed = person.get("distance_smoothed", 0)
+                    # Corrigir: usar distance_smoothed OU distance_raw
+                    distance_smoothed = person.get("distance_smoothed", person.get("distance_raw", 0))
                     x_pos = person.get("x_pos", 0)
                     y_pos = person.get("y_pos", 0)
                     stationary = person.get("stationary", False)
-                    
+
                     # ✅ CALCULA ZONA ESPECÍFICA DA ÁREA usando coordenadas x,y
                     zone = self.zone_manager.get_zone(x_pos, y_pos)
                     person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
-                    
+
                     status = "Parado" if stationary else "Móvel"
                     pos_str = f"{x_pos:.1f},{y_pos:.1f}"
-                    
+
                     zone_desc = self.zone_manager.get_zone_description(zone)[:19]
                     print(f"{zone_desc:<20} {distance_smoothed:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8}")
-                
+
                 # Envia dados para planilha (formato específico Gravatá) - COM CONTROLE TEMPORAL
                 if self.gsheets_manager:
                     current_time = time.time()
-                    
+
                     # EVITA SPAM: Só adiciona se passou tempo suficiente desde última adição
                     if (current_time - self.last_data_add_time) >= self.min_interval_between_adds:
                         avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
                         zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
                         zones_str = ",".join(sorted(zones_detected))
-                        
+
                         if len(active_people) == 1:
                             person_description = f"Pessoa_{self.area_tipo}"
                         elif len(active_people) <= 3:
@@ -631,8 +645,10 @@ class SingleRadarCounter:
                             person_description = f"Grupo_Medio_{self.area_tipo}"
                         else:
                             person_description = f"Grupo_Grande_{self.area_tipo}"
-                        
-                        # Formato específico para Gravatá (diferente do Santa Cruz)
+
+                        # Corrigir: usar distance_smoothed OU distance_raw
+                        avg_distance = sum(p.get('distance_smoothed', p.get('distance_raw', 0)) for p in active_people) / len(active_people)
+
                         row = [
                             radar_id,                                    # 1. radar_id
                             formatted_timestamp,                         # 2. timestamp  
@@ -640,7 +656,7 @@ class SingleRadarCounter:
                             len(active_people),                         # 4. person_count
                             person_description,                         # 5. person_id
                             zones_str,                                  # 6. zone
-                            f"{sum(p.get('distance_smoothed', 0) for p in active_people) / len(active_people):.1f}",  # 7. distance
+                            f"{avg_distance:.1f}",                      # 7. distance
                             f"{avg_confidence:.0f}",                    # 8. confidence
                             self.total_people_detected,                 # 9. total_detected
                             self.max_simultaneous_people,               # 10. max_simultaneous
@@ -652,16 +668,16 @@ class SingleRadarCounter:
                     else:
                         time_remaining = self.min_interval_between_adds - (current_time - self.last_data_add_time)
                         logger.debug(f"⏳ {self.area_tipo}: Aguardando {time_remaining:.1f}s para próxima adição")
-                
+
                 print(f"\n💡 ÁREA {self.area_tipo}: {len(active_people)} pessoa(s) ATIVAS")
-                
+
             else:
                 print(f"\n👻 Área {self.area_tipo} vazia no momento.")
-                
+
                 # Dados zerados para área vazia - COM CONTROLE TEMPORAL
                 if self.gsheets_manager and len(self.previous_people) > 0:
                     current_time = time.time()
-                    
+
                     # EVITA SPAM de status vazio: Só adiciona se passou tempo suficiente
                     if (current_time - self.last_data_add_time) >= self.min_interval_between_adds:
                         row = [
@@ -680,12 +696,12 @@ class SingleRadarCounter:
                         self.pending_data.append(row)
                         self.last_data_add_time = current_time
                         logger.info(f"📊 Status VAZIA {self.area_tipo} adicionado ao buffer")
-            
+
             print("=" * 60)
-            
+
             # Envia dados controladamente
             self.send_pending_data_to_sheets()
-            
+
         except Exception as e:
             logger.error(f"Erro ao processar dados JSON {self.area_tipo}: {e}")
 
