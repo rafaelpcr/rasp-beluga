@@ -114,9 +114,9 @@ class ZoneManager:
             },
             
             # CENTRO (X entre -0.8 e 0.8)
-            'CORETO': {
+            'CENTRO': {
                 'x_min': -1.0, 'x_max': 1.0,
-                'y_min': 1.0, 'y_max': 4.5,
+                'y_min': 2.0, 'y_max': 4.5,
                 'distance_range': (1.0, 5.0)
             },
             
