@@ -139,7 +139,7 @@ class ZoneManager:
         }
         
     def get_zone(self, x, y):
-        """Determinar zona baseada na posição real das ativações"""
+        """Determinar zona baseada APENAS nas ativações específicas"""
         distance = self.get_distance(x, y)
         
         # Verifica cada ativação baseada na posição X,Y e distância
@@ -149,15 +149,8 @@ class ZoneManager:
                 config['distance_range'][0] <= distance <= config['distance_range'][1]):
                 return zona_name
         
-        # Zonas de fallback baseadas apenas na distância
-        if distance <= 2.0:
-            return 'ENTRADA'  # Muito próximo do radar
-        elif distance <= 4.0:
-            return 'CENTRO_LIVRE'  # Centro do estande
-        elif distance <= 7.0:
-            return 'ATIVACAO_GERAL'  # Área geral das ativações
-        else:
-            return 'FORA_ESTANDE'  # Fora do alcance útil
+        # ✅ Se não está em nenhuma ativação específica, retorna FORA_ATIVACOES
+        return 'FORA_ATIVACOES'
     
     def get_distance(self, x, y):
         """Calcular distância do radar"""
@@ -165,18 +158,15 @@ class ZoneManager:
         return math.sqrt(x**2 + y**2)
     
     def get_zone_description(self, zone_name):
-        """Retorna descrição amigável da zona"""
+        """Retorna descrição amigável da zona (APENAS ativações específicas)"""
         descriptions = {
-            'SALA_REBOCO': 'Sala de Reboco (Esquerda)',
-            'IGREJINHA': 'Igrejinha (Esquerda)',
-            'CORETO': 'Coreto Central',
-            'ARGOLA': 'Jogo da Argola (Direita)',
-            'BEIJO': 'Barraca do Beijo (Direita)',
-            'PESCARIA': 'Pescaria (Direita)',
-            'ENTRADA': 'Entrada do Estande',
-            'CENTRO_LIVRE': 'Centro Livre',
-            'ATIVACAO_GERAL': 'Área de Ativações',
-            'FORA_ESTANDE': 'Fora do Estande'
+            'SALA_REBOCO': 'Sala de Reboco',
+            'IGREJINHA': 'Igrejinha', 
+            'CORETO': 'Coreto',
+            'ARGOLA': 'Jogo da Argola',
+            'BEIJO': 'Barraca do Beijo',
+            'PESCARIA': 'Pescaria',
+            'FORA_ATIVACOES': 'Fora das Ativações'
         }
         return descriptions.get(zone_name, zone_name)
 
