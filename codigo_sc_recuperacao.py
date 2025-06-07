@@ -764,13 +764,16 @@ class AutoRecoveryRadarCounter:
                     consecutive_errors = 0
 
     def convert_timestamp(self, timestamp_ms):
-        """Converte timestamp para formato brasileiro"""
+        """Converte timestamp para formato brasileiro (sempre usa horário atual do sistema)"""
         try:
+            # Sempre usa horário atual do sistema para consistência
             dt = datetime.now()
             return dt.strftime('%d/%m/%Y %H:%M:%S')
         except Exception as e:
             logger.debug(f"Erro na conversão de timestamp: {e}")
-            return datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+            # Fallback ainda mais simples
+            import time
+            return time.strftime('%d/%m/%Y %H:%M:%S')
 
     def format_duration(self, duration_ms):
         """Formata duração em milissegundos para formato legível"""
