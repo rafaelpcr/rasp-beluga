@@ -446,7 +446,6 @@ class AutoRecoveryRadarCounter:
                 logger.warning(f"⚠️ Muitas falhas consecutivas ({self.consecutive_connection_failures}) - pausando 5 minutos")
                 time.sleep(300)  # 5 minutos de pausa
                 self.consecutive_connection_failures = 0
-                return False
             
             logger.info(f"🔄 Tentando recuperar conexão serial (tentativa {self.consecutive_connection_failures})...")
             
@@ -793,35 +792,38 @@ class AutoRecoveryRadarCounter:
             return "N/A"
 
     def update_people_count(self, person_count, active_people):
-        """Sistema COMPLETO de tracking (igual ao original + auto-recovery)"""
+        """Sistema CORRIGIDO de tracking para eventos - lógica precisa de entrada/saída (IGUAL AO ORIGINAL)"""
         current_time = time.time()
         
         # Cria IDs únicos baseados em posição estável
         current_people_dict = {}
         
         for i, person in enumerate(active_people):
+            # Cria ID único baseado em posição estável (não no ID do Arduino)
             x_pos = person.get('x_pos', 0)
             y_pos = person.get('y_pos', 0) 
-            distance = person.get('distance_raw', 0)
+            distance = person.get('distance_raw', 0)  # ✅ Arduino minimal só envia distance_raw
             
-            # ✅ CALCULA ZONA ESPECÍFICA usando coordenadas x,y
+            # ✅ CALCULA ZONA ESPECÍFICA DAS ATIVAÇÕES usando coordenadas x,y
             zone = self.zone_manager.get_zone(x_pos, y_pos)
-            person["zone"] = zone
+            person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
             
-            # ID baseado na posição arredondada (estável)
+            # ID baseado na posição arredondada (estável para pessoa parada)
             stable_id = f"P_{zone}_{distance:.1f}_{i}"
             
-            # Procura se já existe pessoa similar
+            # Procura se já existe pessoa similar (mesma zona, distância similar)
             found_existing = None
             for existing_id, existing_person in self.current_people.items():
-                existing_dist = existing_person.get('distance_raw', 0)
+                existing_dist = existing_person.get('distance_raw', 0)  # ✅ Arduino minimal
                 existing_zone = existing_person.get('zone', '')
                 
+                # Se pessoa está na mesma zona e distância similar (±0.3m), é a mesma
                 if (existing_zone == zone and 
                     abs(existing_dist - distance) < 0.3):
                     found_existing = existing_id
                     break
             
+            # Se encontrou pessoa similar, mantém ID existente
             if found_existing:
                 current_people_dict[found_existing] = person
                 current_people_dict[found_existing]['last_seen'] = current_time
@@ -829,22 +831,25 @@ class AutoRecoveryRadarCounter:
                 # Nova pessoa detectada
                 person['first_seen'] = current_time
                 person['last_seen'] = current_time
-                person['distance_smoothed'] = distance
-                person['confidence'] = 85
-                person['stationary'] = False
+                # ✅ Adiciona campos padrão que o Arduino minimal não envia
+                person['distance_smoothed'] = distance  # Usa distance_raw como smoothed
+                person['confidence'] = 85  # Valor padrão razoável
+                person['stationary'] = False  # Assume móvel por padrão
                 current_people_dict[stable_id] = person
         
-        # Detecta ENTRADAS REAIS
+        # Detecta ENTRADAS REAIS (novas pessoas que não existiam)
         new_entries = []
         for person_id, person_info in current_people_dict.items():
             if person_id not in self.current_people:
+                # Verifica se não é pessoa que acabou de sair (evita flickering)
                 is_really_new = True
                 for old_id, old_person in self.previous_people.items():
                     old_zone = old_person.get('zone', '')
-                    old_dist = old_person.get('distance_raw', 0)
+                    old_dist = old_person.get('distance_raw', 0)  # ✅ Arduino minimal
                     new_zone = person_info.get('zone', '')
-                    new_dist = person_info.get('distance_raw', 0)
+                    new_dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
                     
+                    # Se pessoa muito similar saiu recentemente, não conta como nova
                     if (old_zone == new_zone and 
                         abs(old_dist - new_dist) < 0.5 and
                         (current_time - old_person.get('last_seen', 0)) < 2.0):
@@ -857,19 +862,20 @@ class AutoRecoveryRadarCounter:
                     self.entries_count += 1
                     self.unique_people_today.add(person_id)
                     zone = person_info.get('zone', 'DESCONHECIDA')
-                    dist = person_info.get('distance_raw', 0)
+                    dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
                     logger.info(f"🆕 ENTRADA REAL: {zone} {dist:.1f}m (Total: {self.total_people_detected})")
         
-        # Detecta SAÍDAS REAIS
+        # Detecta SAÍDAS REAIS (pessoas que realmente saíram)
         exits = []
         for person_id, person_info in self.current_people.items():
             if person_id not in current_people_dict:
+                # Pessoa saiu apenas se não foi detectada por tempo suficiente
                 last_seen = person_info.get('last_seen', 0)
-                if (current_time - last_seen) > 1.0:
+                if (current_time - last_seen) > 1.0:  # 1 segundo de timeout
                     exits.append(person_id)
                     self.exits_count += 1
                     zone = person_info.get('zone', 'DESCONHECIDA')
-                    dist = person_info.get('distance_raw', 0)
+                    dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
                     logger.info(f"🚪 SAÍDA REAL: {zone} {dist:.1f}m (Entradas: {self.entries_count}, Saídas: {self.exits_count})")
         
         # Atualiza estado
@@ -884,12 +890,12 @@ class AutoRecoveryRadarCounter:
         
         # Log apenas se houve mudanças reais
         if new_entries or exits:
-            logger.info(f"📊 STATUS: {current_simultaneous} ativas | {self.total_people_detected} total | Máx: {self.max_simultaneous_people}")
+            logger.info(f"📊 STATUS CORRIGIDO: {current_simultaneous} ativas | {self.total_people_detected} total real | Máx: {self.max_simultaneous_people}")
         
         self.last_update_time = current_time
 
     def process_json_data(self, data_json):
-        """Processa dados JSON COMPLETO (igual ao original + auto-recovery)"""
+        """Processa dados JSON CORRIGIDO (igual ao original sem duplicação)"""
         try:
             radar_id = data_json.get("radar_id", self.radar_id)
             timestamp_ms = data_json.get("timestamp_ms", 0)
@@ -899,10 +905,14 @@ class AutoRecoveryRadarCounter:
             session_duration_ms = data_json.get("session_duration_ms", 0)
             update_rate_hz = data_json.get("update_rate_hz", 8.3)
             
+            # IGNORA dados de contagem do Arduino (não são confiáveis para eventos)
+            # Arduino envia IDs baseados em timestamp/contador interno, não pessoas reais
+            # Vamos usar APENAS nossa lógica Python baseada em posição e movimento real
+            
             # Converte timestamp para formato legível
             formatted_timestamp = self.convert_timestamp(timestamp_ms)
             
-            # Atualiza contadores locais com lógica COMPLETA
+            # Atualiza contadores locais APENAS UMA VEZ (evita duplicação)
             self.update_people_count(person_count, active_people)
             
             # ✅ DISPLAY COMPLETO (evita clear em systemd)
@@ -921,7 +931,7 @@ class AutoRecoveryRadarCounter:
             duration_str = self.format_duration(runtime.total_seconds() * 1000)
             print(f"⏱️ SESSÃO: {duration_str} | 🔄 Restarts: {self.system_restart_count}")
             
-            # Status do envio para planilha
+            # Status do envio para planilha (ANTI-QUOTA)
             pending_count = len(self.pending_data)
             time_since_last_send = time.time() - self.last_sheets_write
             next_send_in = max(0, self.sheets_write_interval - time_since_last_send)
@@ -937,16 +947,16 @@ class AutoRecoveryRadarCounter:
                 
                 current_time = time.time()
                 for i, person in enumerate(active_people):
-                    confidence = person.get("confidence", 85)
-                    distance_raw = person.get("distance_raw", 0)
-                    distance_smoothed = person.get("distance_smoothed", distance_raw)
+                    # ✅ Arduino minimal: adapta campos ausentes
+                    confidence = person.get("confidence", 85)  # Valor padrão
+                    distance_raw = person.get("distance_raw", 0)  # Novo campo principal
+                    distance_smoothed = person.get("distance_smoothed", distance_raw)  # Fallback
                     x_pos = person.get("x_pos", 0)
                     y_pos = person.get("y_pos", 0)
-                    stationary = person.get("stationary", False)
+                    stationary = person.get("stationary", False)  # Valor padrão
                     
-                    # ✅ CALCULA ZONA usando coordenadas x,y
-                    zone = self.zone_manager.get_zone(x_pos, y_pos)
-                    person["zone"] = zone
+                    # ✅ ZONA JÁ FOI CALCULADA no update_people_count
+                    zone = person.get("zone", self.zone_manager.get_zone(x_pos, y_pos))
                     
                     # Encontra ID da nossa lógica interna
                     our_person_id = None
@@ -957,7 +967,7 @@ class AutoRecoveryRadarCounter:
                             our_person_id = internal_id
                             break
                     
-                    # Calcula tempo desde primeira detecção
+                    # Calcula tempo desde primeira detecção (nossa lógica)
                     if our_person_id and our_person_id in self.current_people:
                         first_seen = self.current_people[our_person_id].get('first_seen', current_time)
                         time_in_area = current_time - first_seen
@@ -965,18 +975,22 @@ class AutoRecoveryRadarCounter:
                     else:
                         time_str = "novo"
                     
+                    # Status da pessoa
                     status = "Parado" if stationary else "Móvel"
                     pos_str = f"{x_pos:.1f},{y_pos:.1f}"
                     
-                    zone_desc = self.zone_manager.get_zone_description(zone)[:14]
+                    zone_desc = self.zone_manager.get_zone_description(zone)[:14]  # Trunca para caber
                     print(f"{zone_desc:<15} {distance_raw:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
                 
-                # ✅ ENVIA DADOS COMPLETOS
+                # Envia APENAS UM resumo por ciclo (não uma linha por pessoa) - SEM duplicação
                 if self.gsheets_manager:
+                    # Calcula dados agregados
                     avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
+                    # ✅ COLETA ZONAS JÁ CORRIGIDAS (calculadas no update_people_count)
                     zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
                     zones_str = ",".join(sorted(zones_detected))
                     
+                    # ID mais profissional baseado no contexto
                     if len(active_people) == 1:
                         person_description = "Pessoa Individual"
                     elif len(active_people) <= 3:
@@ -989,25 +1003,25 @@ class AutoRecoveryRadarCounter:
                         person_description = "Multidão"
                     
                     row = [
-                        radar_id,
-                        formatted_timestamp,
-                        len(active_people),
-                        person_description,
-                        zones_str,
-                        f"{sum(p.get('distance_raw', p.get('distance_smoothed', 0)) for p in active_people) / len(active_people):.1f}",
-                        f"{avg_confidence:.0f}",
-                        self.total_people_detected,
-                        self.max_simultaneous_people
+                        radar_id,                          # 1. radar_id
+                        formatted_timestamp,               # 2. timestamp
+                        len(active_people),                # 3. person_count (real detectadas agora)
+                        person_description,                # 4. person_id (descrição profissional)
+                        zones_str,                         # 5. zone (todas as zonas ordenadas)
+                        f"{sum(p.get('distance_raw', p.get('distance_smoothed', 0)) for p in active_people) / len(active_people):.1f}",  # 6. distance (média) - Arduino minimal
+                        f"{avg_confidence:.0f}",           # 7. confidence (média)
+                        self.total_people_detected,       # 8. total_detected (nossa contagem real)
+                        self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
                     ]
                     self.pending_data.append(row)
                 
                 print(f"\n💡 DETECTANDO {len(active_people)} pessoa(s) SIMULTANEAMENTE")
                 
-                # ✅ ESTATÍSTICAS POR ZONA
+                # ✅ ESTATÍSTICAS POR ZONA (usando zonas já corrigidas)
                 zone_stats = {}
                 high_confidence = 0
                 for person in active_people:
-                    zone = person.get("zone", "N/A")
+                    zone = person.get("zone", "N/A")  # Zona já foi corrigida no update_people_count
                     zone_stats[zone] = zone_stats.get(zone, 0) + 1
                     if person.get("confidence", 0) >= 70:
                         high_confidence += 1
@@ -1024,11 +1038,18 @@ class AutoRecoveryRadarCounter:
             else:
                 print(f"\n👻 Nenhuma pessoa detectada no momento.")
                 
-                # Envia dados zerados apenas se houve mudança
+                # Envia dados zerados apenas se houve mudança de estado - SEM duplicação
                 if self.gsheets_manager and len(self.previous_people) > 0:
                     row = [
-                        radar_id, formatted_timestamp, 0, "Area_Vazia", "VAZIA",
-                        "0", "0", self.total_people_detected, self.max_simultaneous_people
+                        radar_id,                          # 1. radar_id
+                        formatted_timestamp,               # 2. timestamp
+                        0,                                 # 3. person_count (zero)
+                        "Area_Vazia",                      # 4. person_id (indicador)
+                        "VAZIA",                           # 5. zone 
+                        "0",                               # 6. distance
+                        "0",                               # 7. confidence
+                        self.total_people_detected,       # 8. total_detected (nossa contagem real)
+                        self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
                     ]
                     self.pending_data.append(row)
             
@@ -1037,7 +1058,7 @@ class AutoRecoveryRadarCounter:
             print("✅ Tracking preciso | ✅ Auto-reconexão | ✅ Anti-quota")
             print("⚡ Pressione Ctrl+C para encerrar")
             
-            # ✅ ENVIA COM AUTO-RECOVERY
+            # ✅ ENVIA COM AUTO-RECOVERY (apenas uma vez)
             self.send_pending_data_with_recovery()
             
         except Exception as e:
@@ -1045,31 +1066,44 @@ class AutoRecoveryRadarCounter:
             logger.debug(f"JSON recebido: {data_json}")
 
     def send_pending_data_with_recovery(self):
-        """Envia dados com sistema de auto-recuperação"""
-        current_time = time.time()
-        
-        if (current_time - self.last_sheets_write) < self.sheets_write_interval:
-            return
-        
-        if not self.pending_data or not self.gsheets_manager:
-            return
-        
-        data_to_send = self.pending_data[-5:]  # Máximo 5 linhas por vez
-        
+        """Envia dados para Google Sheets de forma controlada (ANTI-QUOTA EXCEEDED) - igual ao original"""
         try:
-            for row in data_to_send:
-                success = self.gsheets_manager.append_row_with_auto_recovery(row)
-                if success:
-                    self.last_sheets_success = datetime.now()
-                time.sleep(0.5)
+            current_time = time.time()
             
+            # Verifica se já passou tempo suficiente desde último envio
+            if (current_time - self.last_sheets_write) < self.sheets_write_interval:
+                return  # Ainda não é hora de enviar
+            
+            # Se não há dados pendentes, não faz nada
+            if not self.pending_data or not self.gsheets_manager:
+                return
+            
+            # Pega apenas os dados mais recentes (máximo 10 linhas por vez) - IGUAL AO ORIGINAL
+            data_to_send = self.pending_data[-10:] if len(self.pending_data) > 10 else self.pending_data
+            
+            # Envia em lote (mais eficiente) com auto-recovery
             if data_to_send:
-                logger.info(f"📊 {len(data_to_send)} linhas enviadas com auto-recovery")
+                logger.info(f"📊 Enviando {len(data_to_send)} linhas para Google Sheets com auto-recovery...")
+                
+                # Envia todas as linhas com retry automático (igual ao original mas com auto-recovery)
+                for row in data_to_send:
+                    success = self.gsheets_manager.append_row_with_auto_recovery(row)
+                    if success:
+                        self.last_sheets_success = datetime.now()
+                    time.sleep(0.5)  # Pequena pausa entre linhas
+                
+                logger.info(f"✅ {len(data_to_send)} linhas enviadas com auto-recovery!")
+                
+                # Atualiza controles
                 self.last_sheets_write = current_time
-                self.pending_data = []
+                self.pending_data = []  # Limpa dados enviados
                 
         except Exception as e:
             logger.error(f"❌ Erro no envio com recovery: {e}")
+            # Em caso de erro, mantém dados para próxima tentativa
+            if "quota" in str(e).lower() or "429" in str(e):
+                logger.warning("⚠️ Quota excedida - aumentando intervalo para 60s")
+                self.sheets_write_interval = 60.0  # Aumenta intervalo se quota excedida (igual ao original)
 
     def get_current_count(self):
         """Retorna o último person_count recebido"""
