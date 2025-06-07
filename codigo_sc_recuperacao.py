@@ -75,10 +75,6 @@ class AutoRecoveryGoogleSheetsManager:
         """Conecta com sistema de recuperação robusto"""
         for attempt in range(3):
             try:
-                # Verificação básica do arquivo de credenciais
-                if not os.path.exists(self.creds_path):
-                    raise Exception(f"Arquivo de credenciais não encontrado: {self.creds_path}")
-                
                 # Re-cria credenciais sempre (evita token expirado)
                 SCOPES = [
                     'https://www.googleapis.com/auth/spreadsheets',
@@ -99,16 +95,7 @@ class AutoRecoveryGoogleSheetsManager:
                 return True
                 
             except Exception as e:
-                error_msg = str(e)
-                logger.warning(f"⚠️ Falha na conexão tentativa {attempt + 1}: {error_msg}")
-                
-                # Se é erro crítico de credenciais, não faz sentido tentar novamente
-                if ("não encontrado" in error_msg.lower() or 
-                    "no such file" in error_msg.lower() or
-                    "json" in error_msg.lower() and "decode" in error_msg.lower()):
-                    logger.error(f"❌ Erro crítico de credenciais - parando tentativas")
-                    raise e
-                
+                logger.warning(f"⚠️ Falha na conexão tentativa {attempt + 1}: {e}")
                 if attempt < 2:
                     time.sleep((attempt + 1) * 5)  # Backoff
         
@@ -1116,26 +1103,10 @@ def main():
     
     # Configura Google Sheets com auto-recovery
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    credentials_file = os.path.join(script_dir, 'serial_radar', 'credenciais.json')
     
-    # Tenta diferentes localizações das credenciais
-    possible_paths = [
-        '/home/beluga/rasp-beluga/credenciais.json',  # Caminho absoluto onde você confirmou que está
-        os.path.join(script_dir, 'credenciais.json'),  # Mesmo diretório do script
-        os.path.join(os.getcwd(), 'credenciais.json'),  # Diretório atual
-        'credenciais.json'  # Apenas o nome do arquivo
-    ]
-    
-    credentials_file = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            credentials_file = path
-            logger.info(f"✅ Credenciais encontradas em: {credentials_file}")
-            break
-    
-    if not credentials_file:
-        logger.error(f"❌ Credenciais não encontradas em nenhum local:")
-        for path in possible_paths:
-            logger.error(f"   ❌ {path}")
+    if not os.path.exists(credentials_file):
+        logger.error(f"❌ Credenciais não encontradas: {credentials_file}")
         return
     
     try:
