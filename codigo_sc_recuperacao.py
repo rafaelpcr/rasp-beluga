@@ -1103,10 +1103,26 @@ def main():
     
     # Configura Google Sheets com auto-recovery
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    credentials_file = os.path.join(script_dir, 'serial_radar', 'credenciais.json')
     
-    if not os.path.exists(credentials_file):
-        logger.error(f"❌ Credenciais não encontradas: {credentials_file}")
+    # Tenta diferentes localizações das credenciais
+    possible_paths = [
+        '/home/beluga/rasp-beluga/credenciais.json',  # Caminho absoluto onde você confirmou que está
+        os.path.join(script_dir, 'credenciais.json'),  # Mesmo diretório do script
+        os.path.join(os.getcwd(), 'credenciais.json'),  # Diretório atual
+        'credenciais.json'  # Apenas o nome do arquivo
+    ]
+    
+    credentials_file = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            credentials_file = path
+            logger.info(f"✅ Credenciais encontradas em: {credentials_file}")
+            break
+    
+    if not credentials_file:
+        logger.error(f"❌ Credenciais não encontradas em nenhum local:")
+        for path in possible_paths:
+            logger.error(f"   ❌ {path}")
         return
     
     try:
