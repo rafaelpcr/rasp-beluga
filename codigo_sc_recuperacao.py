@@ -75,6 +75,10 @@ class AutoRecoveryGoogleSheetsManager:
         """Conecta com sistema de recuperação robusto"""
         for attempt in range(3):
             try:
+                # Verificação básica do arquivo de credenciais
+                if not os.path.exists(self.creds_path):
+                    raise Exception(f"Arquivo de credenciais não encontrado: {self.creds_path}")
+                
                 # Re-cria credenciais sempre (evita token expirado)
                 SCOPES = [
                     'https://www.googleapis.com/auth/spreadsheets',
@@ -95,7 +99,16 @@ class AutoRecoveryGoogleSheetsManager:
                 return True
                 
             except Exception as e:
-                logger.warning(f"⚠️ Falha na conexão tentativa {attempt + 1}: {e}")
+                error_msg = str(e)
+                logger.warning(f"⚠️ Falha na conexão tentativa {attempt + 1}: {error_msg}")
+                
+                # Se é erro crítico de credenciais, não faz sentido tentar novamente
+                if ("não encontrado" in error_msg.lower() or 
+                    "no such file" in error_msg.lower() or
+                    "json" in error_msg.lower() and "decode" in error_msg.lower()):
+                    logger.error(f"❌ Erro crítico de credenciais - parando tentativas")
+                    raise e
+                
                 if attempt < 2:
                     time.sleep((attempt + 1) * 5)  # Backoff
         
