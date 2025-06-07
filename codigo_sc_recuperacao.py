@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-CONTADOR SANTA CRUZ v4.3 + AUTO-RECUPERAÇÃO
+CONTADOR SANTA CRUZ v4.3.1 + AUTO-RECUPERAÇÃO ESTÁVEL
 Sistema que resolve automaticamente problemas após 3+ horas
+MELHORIAS v4.3.1: Conexão mais estável, menos reconexões agressivas
 """
 
 import gspread
@@ -43,7 +44,7 @@ RADAR_CONFIG = {
     'baudrate': 115200,
     'spreadsheet_id': '1zVVyL6D9XSrzFvtDxaGJ-3CdniD-gG3Q-bUUXyqr3D4',
     'color': '🔴',
-    'description': 'Contador v4.3: Arduino minimal + Auto-Recovery'
+    'description': 'Contador v4.3.1: Estável + Auto-Recovery'
 }
 
 class AutoRecoveryGoogleSheetsManager:
@@ -336,9 +337,9 @@ class AutoRecoveryRadarCounter:
         self.reentry_timeout = 10.0
         self.last_update_time = time.time()
         
-        # Configurações anti-quota
+        # Configurações anti-quota (mais suaves)
         self.last_sheets_write = 0
-        self.sheets_write_interval = 30.0
+        self.sheets_write_interval = 60.0  # 1 minuto em vez de 30s
         self.pending_data = []
         
         # ✅ ESTATÍSTICAS DETALHADAS (igual ao original)
@@ -348,6 +349,12 @@ class AutoRecoveryRadarCounter:
         
         # Thread de monitoramento
         self.monitoring_thread = None
+        
+        # Controle de estabilidade (NOVO)
+        self.last_connection_attempt = datetime.now() - timedelta(minutes=10)
+        self.connection_cooldown = 60  # 1 minuto entre tentativas
+        self.consecutive_connection_failures = 0
+        self.max_connection_failures = 5  # Mais tolerante
         
     def start_health_monitoring(self):
         """Inicia monitoramento de saúde em background"""
@@ -366,20 +373,21 @@ class AutoRecoveryRadarCounter:
                 time.sleep(30)
                 
     def _check_system_health(self):
-        """Verifica saúde geral do sistema"""
+        """Verifica saúde geral do sistema (mais suave)"""
         now = datetime.now()
         
-        # 1. Verifica recebimento de dados serial
+        # 1. Verifica recebimento de dados serial (mais tolerante)
         time_since_data = now - self.last_data_received
-        if time_since_data > timedelta(minutes=5):
+        if time_since_data > timedelta(minutes=10):  # 10 minutos em vez de 5
             logger.warning(f"⚠️ Sem dados seriais há {time_since_data}")
-            self._attempt_serial_recovery()
+            if self._should_attempt_recovery():
+                self._attempt_serial_recovery()
         
-        # 2. Verifica envios para planilha
+        # 2. Verifica envios para planilha (menos frequente)
         time_since_sheets = now - self.last_sheets_success
-        if time_since_sheets > timedelta(minutes=10):
+        if time_since_sheets > timedelta(minutes=20):  # 20 minutos em vez de 10
             logger.warning(f"⚠️ Sem envios há {time_since_sheets}")
-            if self.gsheets_manager:
+            if self.gsheets_manager and self._should_attempt_recovery():
                 self.gsheets_manager._attempt_full_recovery()
         
         # 3. Verifica uso de memória
@@ -397,11 +405,23 @@ class AutoRecoveryRadarCounter:
         except Exception as e:
             logger.debug(f"Erro verificando memória: {e}")
         
-        # 4. Restart preventivo após 6 horas
+        # 4. Restart preventivo após 12 horas (menos agressivo)
         runtime = now - self.start_time
-        if runtime > timedelta(hours=6):
+        if runtime > timedelta(hours=12):  # 12 horas em vez de 6
             logger.info(f"⏰ Runtime {runtime} - restart preventivo recomendado")
-            self._attempt_system_restart()
+            if self._should_attempt_recovery():
+                self._attempt_system_restart()
+    
+    def _should_attempt_recovery(self):
+        """Verifica se deve tentar recovery (com cooldown)"""
+        now = datetime.now()
+        time_since_last = now - self.last_connection_attempt
+        
+        if time_since_last.total_seconds() < self.connection_cooldown:
+            return False
+            
+        self.last_connection_attempt = now
+        return True
     
     def _cleanup_memory(self):
         """Limpa memória e buffers"""
@@ -418,24 +438,34 @@ class AutoRecoveryRadarCounter:
             logger.error(f"❌ Erro limpando memória: {e}")
     
     def _attempt_serial_recovery(self):
-        """Tenta recuperar conexão serial"""
+        """Tenta recuperar conexão serial (mais suave)"""
         try:
-            logger.info("🔄 Tentando recuperar conexão serial...")
+            self.consecutive_connection_failures += 1
             
-            # Fecha conexão atual
+            if self.consecutive_connection_failures > self.max_connection_failures:
+                logger.warning(f"⚠️ Muitas falhas consecutivas ({self.consecutive_connection_failures}) - pausando 5 minutos")
+                time.sleep(300)  # 5 minutos de pausa
+                self.consecutive_connection_failures = 0
+                return False
+            
+            logger.info(f"🔄 Tentando recuperar conexão serial (tentativa {self.consecutive_connection_failures})...")
+            
+            # Fecha conexão atual com pausa maior
             if self.serial_connection:
                 try:
                     self.serial_connection.close()
                 except:
                     pass
-                time.sleep(2)
+                time.sleep(5)  # 5 segundos em vez de 2
             
             # Tenta reconectar
             if self.connect():
                 logger.info("✅ Conexão serial recuperada!")
+                self.consecutive_connection_failures = 0
                 return True
             else:
-                logger.error("❌ Falha na recuperação serial")
+                logger.error(f"❌ Falha na recuperação serial (tentativa {self.consecutive_connection_failures})")
+                time.sleep(10)  # Pausa antes da próxima tentativa
                 return False
                 
         except Exception as e:
@@ -496,14 +526,14 @@ class AutoRecoveryRadarCounter:
                 self.serial_connection = serial.Serial(
                     port=self.port,
                     baudrate=self.baudrate,
-                    timeout=2,
-                    write_timeout=2,
+                    timeout=5,  # Timeout maior
+                    write_timeout=5,  # Write timeout maior
                     bytesize=serial.EIGHTBITS,
                     parity=serial.PARITY_NONE,
                     stopbits=serial.STOPBITS_ONE
                 )
                 
-                time.sleep(3)
+                time.sleep(5)  # Aguarda mais tempo para estabilizar
                 
                 if self.serial_connection.is_open:
                     logger.info(f"✅ Conexão estabelecida com sucesso!")
@@ -628,10 +658,10 @@ class AutoRecoveryRadarCounter:
         logger.info("🛑 Radar parado!")
 
     def receive_data_loop(self):
-        """Loop de dados com auto-recuperação"""
+        """Loop de dados com auto-recuperação (mais estável)"""
         buffer = ""
         consecutive_errors = 0
-        max_consecutive_errors = 5
+        max_consecutive_errors = 10  # Mais tolerante
         
         while self.is_running:
             try:
@@ -646,33 +676,20 @@ class AutoRecoveryRadarCounter:
                         time.sleep(5)
                         continue
                 
-                # ✅ TRATAMENTO ESPECÍFICO PARA "readiness to read but no data"
-                in_waiting = self.serial_connection.in_waiting or 0
-                
-                # Se porta diz que tem dados mas in_waiting = 0, há problema
-                if in_waiting == 0:
-                    # Tenta ler 1 byte para verificar se realmente não tem dados
-                    try:
-                        data = self.serial_connection.read(1)
-                        if not data:
-                            # Dispositivo reporta readiness mas não tem dados = problema
-                            consecutive_errors += 1
-                            if consecutive_errors > 3:
-                                logger.warning(f"{self.color} ⚠️ Dispositivo reporta dados mas não envia - forçando reconexão...")
-                                raise serial.SerialException("Device readiness without data - forcing reconnection")
-                            time.sleep(0.1)
-                            continue
-                        else:
-                            # Adiciona o byte lido ao buffer
-                            text = data.decode('utf-8', errors='ignore')
-                            buffer += text
-                    except serial.SerialTimeoutException:
-                        # Timeout é normal, continua
-                        time.sleep(0.01)
+                # Leitura mais simples e estável
+                try:
+                    in_waiting = self.serial_connection.in_waiting or 0
+                    
+                    if in_waiting > 0:
+                        data = self.serial_connection.read(in_waiting)
+                    else:
+                        # Se não há dados, aguarda um pouco e continua
+                        time.sleep(0.1)
                         continue
-                else:
-                    # Tem dados para ler normalmente
-                    data = self.serial_connection.read(in_waiting)
+                except serial.SerialTimeoutException:
+                    # Timeout é normal
+                    time.sleep(0.1)
+                    continue
                 
                 if data:
                     consecutive_errors = 0
@@ -741,9 +758,9 @@ class AutoRecoveryRadarCounter:
                 
                 # Aumenta tempo de pausa se muitos erros consecutivos
                 if consecutive_errors >= max_consecutive_errors:
-                    logger.warning(f"{self.color} ⚠️ Muitos erros consecutivos ({consecutive_errors}) - pausando por 20s...")
+                    logger.warning(f"{self.color} ⚠️ Muitos erros consecutivos ({consecutive_errors}) - pausando por 60s...")
                     logger.info(f"{self.color} 🔄 O sistema tentará auto-recovery após a pausa...")
-                    time.sleep(20)
+                    time.sleep(60)  # 1 minuto em vez de 20s
                     consecutive_errors = 0
 
     def convert_timestamp(self, timestamp_ms):
@@ -885,8 +902,9 @@ class AutoRecoveryRadarCounter:
             # Atualiza contadores locais com lógica COMPLETA
             self.update_people_count(person_count, active_people)
             
-            # ✅ DISPLAY COMPLETO (igual ao original)
-            os.system('clear')
+            # ✅ DISPLAY COMPLETO (evita clear em systemd)
+            if os.getenv('TERM'):  # Só limpa se tem terminal
+                os.system('clear')
             print(f"\n{self.color} ═══ CONTADOR ROBUSTO + AUTO-RECOVERY ═══")
             print(f"⏰ {formatted_timestamp}")
             print(f"📡 {radar_id} | 👥 ATIVAS: {person_count}")
@@ -1126,9 +1144,9 @@ def main():
         logger.info("   ✅ Auto-reconexão serial inteligente")
         logger.info("   ✅ Auto-recuperação Google Sheets com retry")
         logger.info("   ✅ Monitoramento de saúde em background")
-        logger.info("   ✅ Restart preventivo após 6 horas")
+        logger.info("   ✅ Restart preventivo após 12 horas (menos agressivo)")
         logger.info("   ✅ Limpeza de memória automática")
-        logger.info("   ✅ Anti-quota inteligente (30s intervalo)")
+        logger.info("   ✅ Anti-quota inteligente (60s intervalo - mais suave)")
         logger.info("   ✅ Controle de token expirado")
         logger.info("🎯 RESOLUÇÃO DO PROBLEMA DE 3+ HORAS:")
         logger.info("   • Token expirado ➜ Renovação automática")
@@ -1138,6 +1156,13 @@ def main():
         logger.info("   • Sistema travado ➜ Restart preventivo")
         logger.info("⚡ Sistema HÍBRIDO: Funcionalidades completas + Auto-recovery")
         logger.info("🔄 Reconexão automática habilitada para todos os componentes")
+        logger.info("🎯 MELHORIAS DE ESTABILIDADE v4.3.1:")
+        logger.info("   • Timeouts maiores (5s em vez de 2s)")
+        logger.info("   • Cooldown de 1 minuto entre reconexões")
+        logger.info("   • Tolerância maior a erros (10 em vez de 5)")
+        logger.info("   • Pausas maiores entre tentativas")
+        logger.info("   • TERM environment fix para systemd")
+        logger.info("   • Leitura serial mais simples e robusta")
         logger.info("=" * 80)
         
         # Loop principal melhorado
