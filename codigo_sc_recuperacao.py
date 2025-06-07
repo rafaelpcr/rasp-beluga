@@ -337,9 +337,9 @@ class AutoRecoveryRadarCounter:
         self.reentry_timeout = 10.0
         self.last_update_time = time.time()
         
-        # Configurações anti-quota (mais suaves)
+        # Configurações anti-quota (intervalos maiores para melhor detecção)
         self.last_sheets_write = 0
-        self.sheets_write_interval = 60.0  # 1 minuto em vez de 30s
+        self.sheets_write_interval = 180.0  # 3 minutos em vez de 60s - INTERVALO MAIOR
         self.pending_data = []
         
         # ✅ ESTATÍSTICAS DETALHADAS (igual ao original)
@@ -709,6 +709,8 @@ class AutoRecoveryRadarCounter:
                             try:
                                 data_json = json.loads(line)
                                 self.process_json_data(data_json)
+                                # DELAY DE 3 SEGUNDOS ENTRE PROCESSAMENTOS para melhor detecção
+                                time.sleep(3.0)  
                             except json.JSONDecodeError:
                                 logger.debug(f"JSON inválido: {line[:50]}...")
                             except Exception as e:
@@ -792,7 +794,7 @@ class AutoRecoveryRadarCounter:
             return "N/A"
 
     def update_people_count(self, person_count, active_people):
-        """Sistema CORRIGIDO de tracking para eventos - lógica precisa de entrada/saída (IGUAL AO ORIGINAL)"""
+        """Sistema ROBUSTO de tracking para eventos - lógica precisa de entrada/saída com contagem total melhorada"""
         current_time = time.time()
         
         # Cria IDs únicos baseados em posição estável
@@ -808,18 +810,22 @@ class AutoRecoveryRadarCounter:
             zone = self.zone_manager.get_zone(x_pos, y_pos)
             person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
             
-            # ID baseado na posição arredondada (estável para pessoa parada)
-            stable_id = f"P_{zone}_{distance:.1f}_{i}"
+            # ID baseado na posição arredondada E índice (mais preciso para múltiplas pessoas)
+            stable_id = f"P_{zone}_{distance:.1f}_{x_pos:.1f}_{y_pos:.1f}_{i}"
             
-            # Procura se já existe pessoa similar (mesma zona, distância similar)
+            # Procura se já existe pessoa similar (mesma zona, distância E posição similar)
             found_existing = None
             for existing_id, existing_person in self.current_people.items():
                 existing_dist = existing_person.get('distance_raw', 0)  # ✅ Arduino minimal
                 existing_zone = existing_person.get('zone', '')
+                existing_x = existing_person.get('x_pos', 0)
+                existing_y = existing_person.get('y_pos', 0)
                 
-                # Se pessoa está na mesma zona e distância similar (±0.3m), é a mesma
+                # Se pessoa está na mesma zona, distância E posição similar (±0.3m), é a mesma
                 if (existing_zone == zone and 
-                    abs(existing_dist - distance) < 0.3):
+                    abs(existing_dist - distance) < 0.3 and
+                    abs(existing_x - x_pos) < 0.3 and
+                    abs(existing_y - y_pos) < 0.3):
                     found_existing = existing_id
                     break
             
@@ -837,8 +843,10 @@ class AutoRecoveryRadarCounter:
                 person['stationary'] = False  # Assume móvel por padrão
                 current_people_dict[stable_id] = person
         
-        # Detecta ENTRADAS REAIS (novas pessoas que não existiam)
+        # ✅ CONTAGEM TOTAL ROBUSTA - Detecta ENTRADAS REAIS (novas pessoas que não existiam)
         new_entries = []
+        people_really_new = 0  # Contador específico para novas pessoas reais
+        
         for person_id, person_info in current_people_dict.items():
             if person_id not in self.current_people:
                 # Verifica se não é pessoa que acabou de sair (evita flickering)
@@ -846,37 +854,61 @@ class AutoRecoveryRadarCounter:
                 for old_id, old_person in self.previous_people.items():
                     old_zone = old_person.get('zone', '')
                     old_dist = old_person.get('distance_raw', 0)  # ✅ Arduino minimal
+                    old_x = old_person.get('x_pos', 0)
+                    old_y = old_person.get('y_pos', 0)
                     new_zone = person_info.get('zone', '')
                     new_dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
+                    new_x = person_info.get('x_pos', 0)
+                    new_y = person_info.get('y_pos', 0)
                     
                     # Se pessoa muito similar saiu recentemente, não conta como nova
                     if (old_zone == new_zone and 
                         abs(old_dist - new_dist) < 0.5 and
-                        (current_time - old_person.get('last_seen', 0)) < 2.0):
+                        abs(old_x - new_x) < 0.5 and
+                        abs(old_y - new_y) < 0.5 and
+                        (current_time - old_person.get('last_seen', 0)) < 5.0):  # 5 segundos - ANTI-FLICKERING MAIOR
                         is_really_new = False
                         break
                 
                 if is_really_new:
                     new_entries.append(person_id)
-                    self.total_people_detected += 1
-                    self.entries_count += 1
+                    people_really_new += 1  # Conta pessoa real nova
                     self.unique_people_today.add(person_id)
                     zone = person_info.get('zone', 'DESCONHECIDA')
                     dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
-                    logger.info(f"🆕 ENTRADA REAL: {zone} {dist:.1f}m (Total: {self.total_people_detected})")
+                    pos = f"({person_info.get('x_pos', 0):.1f},{person_info.get('y_pos', 0):.1f})"
+                    logger.info(f"🆕 ENTRADA REAL #{people_really_new}: {zone} {dist:.1f}m {pos}")
+        
+        # ✅ ATUALIZA TOTAL ROBUSTO - Soma pessoas reais novas detectadas
+        if people_really_new > 0:
+            self.total_people_detected += people_really_new
+            self.entries_count += people_really_new
+            if people_really_new == 1:
+                logger.info(f"📊 TOTAL ATUALIZADO: +1 pessoa = {self.total_people_detected} total")
+            else:
+                logger.info(f"📊 TOTAL ATUALIZADO: +{people_really_new} pessoas = {self.total_people_detected} total")
         
         # Detecta SAÍDAS REAIS (pessoas que realmente saíram)
         exits = []
+        people_really_left = 0
         for person_id, person_info in self.current_people.items():
             if person_id not in current_people_dict:
                 # Pessoa saiu apenas se não foi detectada por tempo suficiente
                 last_seen = person_info.get('last_seen', 0)
-                if (current_time - last_seen) > 1.0:  # 1 segundo de timeout
+                if (current_time - last_seen) > 3.0:  # 3 segundos de timeout - MAIOR INTERVALO
                     exits.append(person_id)
+                    people_really_left += 1
                     self.exits_count += 1
                     zone = person_info.get('zone', 'DESCONHECIDA')
                     dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
-                    logger.info(f"🚪 SAÍDA REAL: {zone} {dist:.1f}m (Entradas: {self.entries_count}, Saídas: {self.exits_count})")
+                    pos = f"({person_info.get('x_pos', 0):.1f},{person_info.get('y_pos', 0):.1f})"
+                    logger.info(f"🚪 SAÍDA REAL: {zone} {dist:.1f}m {pos}")
+        
+        if people_really_left > 0:
+            if people_really_left == 1:
+                logger.info(f"📊 SAÍDAS: {self.exits_count} total (Balanço: {self.entries_count - self.exits_count})")
+            else:
+                logger.info(f"📊 SAÍDAS: +{people_really_left} = {self.exits_count} total (Balanço: {self.entries_count - self.exits_count})")
         
         # Atualiza estado
         self.previous_people = self.current_people.copy()
@@ -890,7 +922,7 @@ class AutoRecoveryRadarCounter:
         
         # Log apenas se houve mudanças reais
         if new_entries or exits:
-            logger.info(f"📊 STATUS CORRIGIDO: {current_simultaneous} ativas | {self.total_people_detected} total real | Máx: {self.max_simultaneous_people}")
+            logger.info(f"📊 STATUS ROBUSTO: {current_simultaneous} ativas | {self.total_people_detected} total acumulado | Entradas: {self.entries_count} | Saídas: {self.exits_count} | Máx: {self.max_simultaneous_people}")
         
         self.last_update_time = current_time
 
@@ -922,7 +954,7 @@ class AutoRecoveryRadarCounter:
             print(f"⏰ {formatted_timestamp}")
             print(f"📡 {radar_id} | 👥 ATIVAS: {person_count}")
             print(f"🎯 TOTAL DETECTADAS: {self.total_people_detected} | 📊 MÁXIMO SIMULTÂNEO: {self.max_simultaneous_people}")
-            print(f"🔄 ENTRADAS: {self.entries_count} | 🚪 SAÍDAS: {self.exits_count}")
+            print(f"🔄 ENTRADAS: {self.entries_count} | 🚪 SAÍDAS: {self.exits_count} | 📈 BALANÇO: {self.entries_count - self.exits_count}")
             print(f"🆔 PESSOAS ÚNICAS: {len(self.unique_people_today)}")
             
             # ✅ STATUS AUTO-RECOVERY
@@ -936,14 +968,14 @@ class AutoRecoveryRadarCounter:
             time_since_last_send = time.time() - self.last_sheets_write
             next_send_in = max(0, self.sheets_write_interval - time_since_last_send)
             if pending_count > 0:
-                print(f"📋 BUFFER: {pending_count} linhas | ⏳ Próximo envio em: {next_send_in:.0f}s")
+                print(f"📋 BUFFER: {pending_count} linhas | ⏳ Próximo envio em: {next_send_in:.0f}s (3min intervalo)")
             else:
-                print(f"📋 PLANILHA: Sincronizada ✅ | Último envio: {time_since_sheets}")
+                print(f"📋 PLANILHA: Sincronizada ✅ | Último envio: {time_since_sheets} (envio apenas com mudanças)")
             
             if active_people and len(active_people) > 0:
-                print(f"\n👥 PESSOAS DETECTADAS AGORA ({len(active_people)}):")
-                print(f"{'Ativação':<15} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
-                print("-" * 65)
+                print(f"\n👥 PESSOAS DETECTADAS AGORA ({len(active_people)}) - TRACKING ROBUSTO:")
+                print(f"{'#':<2} {'Ativação':<15} {'Dist(m)':<7} {'X,Y':<12} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
+                print("-" * 75)
                 
                 current_time = time.time()
                 for i, person in enumerate(active_people):
@@ -977,10 +1009,10 @@ class AutoRecoveryRadarCounter:
                     
                     # Status da pessoa
                     status = "Parado" if stationary else "Móvel"
-                    pos_str = f"{x_pos:.1f},{y_pos:.1f}"
+                    pos_str = f"({x_pos:.1f},{y_pos:.1f})"
                     
                     zone_desc = self.zone_manager.get_zone_description(zone)[:14]  # Trunca para caber
-                    print(f"{zone_desc:<15} {distance_raw:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
+                    print(f"{i+1:<2} {zone_desc:<15} {distance_raw:<7.2f} {pos_str:<12} {confidence:<5}% {status:<8} {time_str:<8}")
                 
                 # Envia APENAS UM resumo por ciclo (não uma linha por pessoa) - SEM duplicação
                 if self.gsheets_manager:
@@ -1002,18 +1034,30 @@ class AutoRecoveryRadarCounter:
                     else:
                         person_description = "Multidão"
                     
-                    row = [
-                        radar_id,                          # 1. radar_id
-                        formatted_timestamp,               # 2. timestamp
-                        len(active_people),                # 3. person_count (real detectadas agora)
-                        person_description,                # 4. person_id (descrição profissional)
-                        zones_str,                         # 5. zone (todas as zonas ordenadas)
-                        f"{sum(p.get('distance_raw', p.get('distance_smoothed', 0)) for p in active_people) / len(active_people):.1f}",  # 6. distance (média) - Arduino minimal
-                        f"{avg_confidence:.0f}",           # 7. confidence (média)
-                        self.total_people_detected,       # 8. total_detected (nossa contagem real)
-                        self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
-                    ]
-                    self.pending_data.append(row)
+                    # ENVIA APENAS SE HOUVE MUDANÇAS REAIS (entrada ou saída)
+                    current_people_count = len(active_people)
+                    last_count = getattr(self, 'last_sent_count', -1)
+                    
+                    # Só envia se houve mudança no número de pessoas ou a cada 5 minutos
+                    time_since_last_send = time.time() - self.last_sheets_write
+                    should_send = (current_people_count != last_count or 
+                                 time_since_last_send > 300)  # 5 minutos
+                    
+                    if should_send:
+                        row = [
+                            radar_id,                          # 1. radar_id
+                            formatted_timestamp,               # 2. timestamp
+                            len(active_people),                # 3. person_count (real detectadas agora)
+                            person_description,                # 4. person_id (descrição profissional)
+                            zones_str,                         # 5. zone (todas as zonas ordenadas)
+                            f"{sum(p.get('distance_raw', p.get('distance_smoothed', 0)) for p in active_people) / len(active_people):.1f}",  # 6. distance (média) - Arduino minimal
+                            f"{avg_confidence:.0f}",           # 7. confidence (média)
+                            self.total_people_detected,       # 8. total_detected (nossa contagem real)
+                            self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
+                        ]
+                        self.pending_data.append(row)
+                        self.last_sent_count = current_people_count
+                        logger.info(f"📋 Dados adicionados ao buffer (mudança detectada: {last_count} → {current_people_count})")
                 
                 print(f"\n💡 DETECTANDO {len(active_people)} pessoa(s) SIMULTANEAMENTE")
                 
@@ -1040,22 +1084,39 @@ class AutoRecoveryRadarCounter:
                 
                 # Envia dados zerados apenas se houve mudança de estado - SEM duplicação
                 if self.gsheets_manager and len(self.previous_people) > 0:
-                    row = [
-                        radar_id,                          # 1. radar_id
-                        formatted_timestamp,               # 2. timestamp
-                        0,                                 # 3. person_count (zero)
-                        "Area_Vazia",                      # 4. person_id (indicador)
-                        "VAZIA",                           # 5. zone 
-                        "0",                               # 6. distance
-                        "0",                               # 7. confidence
-                        self.total_people_detected,       # 8. total_detected (nossa contagem real)
-                        self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
-                    ]
-                    self.pending_data.append(row)
+                    # ENVIA APENAS SE MUDOU DE "com pessoas" para "sem pessoas"
+                    last_count = getattr(self, 'last_sent_count', -1)
+                    if last_count != 0:  # Só envia se antes havia pessoas
+                        row = [
+                            radar_id,                          # 1. radar_id
+                            formatted_timestamp,               # 2. timestamp
+                            0,                                 # 3. person_count (zero)
+                            "Area_Vazia",                      # 4. person_id (indicador)
+                            "VAZIA",                           # 5. zone 
+                            "0",                               # 6. distance
+                            "0",                               # 7. confidence
+                            self.total_people_detected,       # 8. total_detected (nossa contagem real)
+                            self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
+                        ]
+                        self.pending_data.append(row)
+                        self.last_sent_count = 0
+                        logger.info(f"📋 Área vazia detectada - dados adicionados ao buffer")
             
             print("\n" + "=" * 60)
             print("🎯 SISTEMA ROBUSTO + AUTO-RECOVERY ATIVO")
             print("✅ Tracking preciso | ✅ Auto-reconexão | ✅ Anti-quota")
+            print("🔄 MELHORIAS DE DETECÇÃO:")
+            print("   • 3 segundos entre captações (evita duplicações)")
+            print("   • 3 segundos timeout para saída (mais estável)")
+            print("   • 5 segundos anti-flickering (entrada/saída)")
+            print("   • 3 minutos intervalo de envio (menos spam)")
+            print("   • Envio apenas com mudanças reais")
+            print("📊 CONTAGEM TOTAL ROBUSTA:")
+            print("   • Detecção precisa de múltiplas pessoas simultâneas")
+            print("   • IDs únicos baseados em posição + zona + distância")
+            print("   • Contagem individual para cada pessoa nova")
+            print("   • Balanço automático (entradas - saídas)")
+            print("   • Histórico acumulativo sempre atualizado")
             print("⚡ Pressione Ctrl+C para encerrar")
             
             # ✅ ENVIA COM AUTO-RECOVERY (apenas uma vez)
