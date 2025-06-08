@@ -239,118 +239,86 @@ class ZoneManager:
         
         # Configuração baseada no tipo de área
         if area_tipo == 'EXTERNA':
-            # Área externa: apenas 2 zonas simples baseadas na distância
+            # Área externa: 2 zonas simples baseadas apenas em posição
             self.ZONA_CONFIGS = {
                 'AREA_INTERESSE': {
                     'x_min': -4.0, 'x_max': 4.0,
-                    'y_min': 0.0, 'y_max': 8.0,
-                    'distance_range': (0.3, 4.0)  # Perto = área de interesse
+                    'y_min': 0.0, 'y_max': 4.0  # Zona próxima
                 },
                 'AREA_PASSAGEM': {
                     'x_min': -4.0, 'x_max': 4.0,
-                    'y_min': 0.0, 'y_max': 8.0,
-                    'distance_range': (4.0, 8.0)  # Afastado = área de passagem
+                    'y_min': 4.0, 'y_max': 8.0  # Zona distante
                 }
             }
         else:  # INTERNA
             # ✅ ÁREA INTERNA: EXPANDIDA para capturar melhor as ativações
             self.ZONA_CONFIGS = {
-                # LADO ESQUERDO (X < -0.8) - Expandido
+                # LADO ESQUERDO (X < -0.8) - Baseado apenas em posição
                 'SALA_REBOCO': {
                     'x_min': -4.0, 'x_max': -0.8,
-                    'y_min': 0.2, 'y_max': 4.0,
-                    'distance_range': (0.8, 5.0)  # ✅ Range expandido
+                    'y_min': 0.2, 'y_max': 4.0
                 },
                 'IGREJINHA': {
                     'x_min': -4.0, 'x_max': -0.8,
-                    'y_min': 2.0, 'y_max': 7.0,
-                    'distance_range': (2.0, 8.0)  # ✅ Range expandido
+                    'y_min': 2.0, 'y_max': 7.0
                 },
                 
-                # LADO DIREITO (X > 0.8) - Expandido
+                # LADO DIREITO (X > 0.8) - Baseado apenas em posição
                 'BEIJO': {
                     'x_min': 0.8, 'x_max': 4.0,
-                    'y_min': 0.5, 'y_max': 5.0,
-                    'distance_range': (1.0, 6.0)  # ✅ Range expandido
+                    'y_min': 0.5, 'y_max': 5.0
                 },
                 'PESCARIA': {
                     'x_min': 0.8, 'x_max': 5.0,
-                    'y_min': 0.2, 'y_max': 4.0,
-                    'distance_range': (2.0, 7.0)  # ✅ Range expandido
+                    'y_min': 0.2, 'y_max': 4.0
                 },
                 'ARGOLA': {
                     'x_min': 0.8, 'x_max': 4.0,
-                    'y_min': 3.0, 'y_max': 8.0,
-                    'distance_range': (3.0, 9.0)  # ✅ Range expandido
+                    'y_min': 3.0, 'y_max': 8.0
                 },
                 
-                # CENTRO - Apenas para posições muito centrais
+                # CENTRO - Baseado apenas em posição
                 'CENTRO': {
                     'x_min': -0.8, 'x_max': 0.8,
-                    'y_min': 0.5, 'y_max': 2.5,
-                    'distance_range': (0.3, 2.5)  # ✅ Restrito apenas para muito perto
+                    'y_min': 0.5, 'y_max': 2.5
                 }
             }
         
     def get_zone(self, x, y):
-        """Determinar zona MELHORADA - prioriza posição X e distância"""
-        distance = self.get_distance(x, y)
+        """Determinar zona baseada APENAS em posição X,Y - SEM filtros de distância"""
         
         if self.area_tipo == 'EXTERNA':
-            # Área externa: verifica posição e distância
+            # Área externa: verifica apenas posição
             for zona_name, config in self.ZONA_CONFIGS.items():
                 if (config['x_min'] <= x <= config['x_max'] and
-                    config['y_min'] <= y <= config['y_max'] and
-                    config['distance_range'][0] <= distance <= config['distance_range'][1]):
+                    config['y_min'] <= y <= config['y_max']):
                     return zona_name
             
-            # Fallback baseado na distância
+            # Fallback baseado na distância (mantido para compatibilidade)
+            distance = self.get_distance(x, y)
             if distance <= 3.5:
                 return 'AREA_INTERESSE'
             else:
                 return 'AREA_PASSAGEM'
         
-        else:  # INTERNA - LÓGICA MELHORADA
-            # Testa todas as zonas específicas
+        else:  # INTERNA - APENAS POSIÇÃO X,Y
+            # Testa zonas baseado APENAS em coordenadas X,Y (SEM distance_range)
             for zona_name, config in self.ZONA_CONFIGS.items():
                 x_ok = config['x_min'] <= x <= config['x_max']
                 y_ok = config['y_min'] <= y <= config['y_max']
-                dist_ok = config['distance_range'][0] <= distance <= config['distance_range'][1]
                 
-                if x_ok and y_ok and dist_ok:
+                if x_ok and y_ok:
                     return zona_name
             
-            # Fallback baseado na posição X e distância
-            
+            # Fallback baseado APENAS na posição X
             if x < -0.8:  # LADO ESQUERDO
-                if distance <= 3.0:
-                    return 'SALA_REBOCO'
-                elif distance <= 7.0:
-                    return 'IGREJINHA'
-                else:
-                    return 'FORA_ATIVACOES'
+                return 'SALA_REBOCO'  # Padrão esquerdo
                     
             elif x > 0.8:  # LADO DIREITO
-                if distance <= 2.5:
-                    return 'BEIJO'
-                elif distance <= 5.0:
-                    return 'PESCARIA'
-                elif distance <= 8.0:
-                    return 'ARGOLA'
-                else:
-                    return 'FORA_ATIVACOES'
+                return 'BEIJO'  # Padrão direito
                     
             else:  # CENTRO (-0.8 <= X <= 0.8)
-                if distance <= 1.5:
-                    return 'CENTRO'
-                elif distance <= 4.0:
-                    # Baseado em Y para decidir se vai para lado esquerdo ou direito
-                    if y > 2.5:
-                        return 'IGREJINHA' if x < 0 else 'ARGOLA'
-                    else:
-                        return 'SALA_REBOCO' if x < 0 else 'BEIJO'
-                else:
-                    return 'FORA_ATIVACOES'
+                return 'CENTRO'  # Padrão centro
     
     def get_distance(self, x, y):
         """Calcular distância do radar"""
@@ -1129,7 +1097,7 @@ class AutoRecoverySingleRadarCounter:
 
                     # Calcula distância média
                     valid_distances = []
-                    for p in active_people:
+                    for i, p in enumerate(active_people):
                         distance_raw = p.get('distance_raw', None)
                         distance_smoothed = p.get('distance_smoothed', None)
                         x = p.get('x_pos', 0)
@@ -1138,15 +1106,22 @@ class AutoRecoverySingleRadarCounter:
                         # Prioriza distância smoothed, depois raw, depois calculada
                         if distance_smoothed is not None and distance_smoothed > 0:
                             distance = distance_smoothed
+                            source = "smoothed"
                         elif distance_raw is not None and distance_raw > 0:
                             distance = distance_raw
+                            source = "raw"
                         else:
                             import math
                             distance = math.sqrt(x**2 + y**2)
+                            source = "calculada"
+                        
+                        # DEBUG: Mostra qual distância está sendo usada
+                        logger.info(f"🔍 DISTÂNCIA {self.area_tipo} Pessoa {i}: {distance:.3f}m ({source}) | X={x:.2f} Y={y:.2f}")
                         
                         valid_distances.append(distance)
                     
                     avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0
+                    logger.info(f"📊 DISTÂNCIA MÉDIA {self.area_tipo}: {avg_distance:.3f}m (enviada para planilha)")
                     
                     # ✅ FORMATO SANTA CRUZ (9 campos) - planilha separada por área
                     row = [
