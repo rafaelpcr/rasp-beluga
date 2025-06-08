@@ -895,7 +895,7 @@ class AutoRecoveryRadarCounter:
             if person_id not in current_people_dict:
                 # Pessoa saiu apenas se não foi detectada por tempo suficiente
                 last_seen = person_info.get('last_seen', 0)
-                if (current_time - last_seen) > 3.0:  # 3 segundos de timeout - MAIOR INTERVALO
+                if (current_time - last_seen) > 30.0:  # 30 segundos de timeout - REALISTA PARA PESSOAS PARADAS
                     exits.append(person_id)
                     people_really_left += 1
                     self.exits_count += 1
@@ -1050,22 +1050,19 @@ class AutoRecoveryRadarCounter:
                             distance_raw = p.get('distance_raw', None)
                             distance_smoothed = p.get('distance_smoothed', None)
                             x = p.get('x_pos', 0)
-                            y = p.get('y_pos', 0)
-                            
-                            # SEMPRE CALCULA DISTÂNCIA DAS COORDENADAS (mais confiável)
-                            import math
-                            calculated_distance = math.sqrt(x**2 + y**2)
-                            
-                            # Usa distância calculada como padrão
-                            distance = calculated_distance
-                            
-                            # Se Arduino enviou distância, compara
-                            arduino_distance = distance_smoothed if distance_smoothed is not None else distance_raw
-                            if arduino_distance is not None and arduino_distance > 0:
-                                if abs(arduino_distance - calculated_distance) < 0.3:
-                                    # Arduino consistente, pode usar
-                                    distance = arduino_distance
-                                # Se não consistente, usa calculada (que já está definida)
+                                                     y = p.get('y_pos', 0)
+                         
+                         # ✅ SEMPRE USA DISTÂNCIA CALCULADA (mais confiável)
+                         import math
+                         calculated_distance = math.sqrt(x**2 + y**2)
+                         distance = calculated_distance  # FORÇA uso da calculada sempre
+                         
+                         # Arduino só para debug (não afeta resultado)
+                         arduino_distance = distance_smoothed if distance_smoothed is not None else distance_raw
+                         if arduino_distance is not None and arduino_distance > 0:
+                             if abs(arduino_distance - calculated_distance) > 0.3:
+                                 logger.debug(f"Arduino suspeito: {arduino_distance:.3f}m vs Real: {calculated_distance:.3f}m")
+                         # SEMPRE usa calculada independente do Arduino
                             
                             valid_distances.append(distance)
                         
