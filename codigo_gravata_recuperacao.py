@@ -382,15 +382,11 @@ class AutoRecoverySingleRadarCounter:
         self.reentry_timeout = 3.0
         self.last_update_time = time.time()
         
-        # Configurações anti-quota (intervalos maiores para melhor detecção)
+        # ✅ SISTEMA DE LOTES IGUAL AO SANTA CRUZ
         self.last_sheets_write = 0
-        self.sheets_write_interval = 30.0  # 30 segundos para teste - depois volta para 180s
+        self.sheets_write_interval = 30.0  # 30 segundos para teste - depois 180s (3min)
         self.pending_data = []
-        
-        # ✅ CONTROLE DE ENVIOS REPETITIVOS
-        self.last_sent_state = None  # Último estado enviado
-        self.min_change_threshold = 0.1  # Mudança mínima para enviar (metros)
-        self.last_significant_change = time.time()  # Última mudança significativa
+        self.max_batch_size = 10  # Máximo 10 linhas por lote (igual Santa Cruz)
         
         # Estatísticas detalhadas
         self.entries_count = 0
@@ -852,43 +848,12 @@ class AutoRecoverySingleRadarCounter:
             return "N/A"
 
     def update_people_count(self, person_count, active_people):
-        """Sistema MELHORADO de tracking - evita contagem duplicada e valores padrão"""
+        """Sistema de tracking IGUAL AO SANTA CRUZ - sem filtros, só agrupamento em lotes"""
         current_time = time.time()
-        
-        # ✅ FILTRA DADOS SUSPEITOS (valores padrão do Arduino)
-        filtered_people = []
-        for person in active_people:
-            x_pos = person.get('x_pos', 0)
-            y_pos = person.get('y_pos', 0)
-            distance_raw = person.get('distance_raw', None)
-            distance_smoothed = person.get('distance_smoothed', None)
-            confidence = person.get('confidence', 0)
-            
-            # ✅ REJEITA dados suspeitos de serem valores padrão
-            is_suspicious = (
-                # Distância exatamente 0.9 (valor padrão comum)
-                (distance_smoothed == 0.9 or distance_raw == 0.9) or
-                # Confiança exatamente 85% (muito comum para ser real)
-                confidence == 85 or
-                # Posição exatamente no centro (0,0)
-                (x_pos == 0 and y_pos == 0) or
-                # Confiança muito baixa
-                confidence < 50
-            )
-            
-            if not is_suspicious:
-                filtered_people.append(person)
-            else:
-                logger.warning(f"⚠️ DADOS SUSPEITOS {self.area_tipo}: X={x_pos} Y={y_pos} D={distance_smoothed or distance_raw} C={confidence}% - IGNORADO")
-        
-        # Se todos os dados foram filtrados, não atualiza nada
-        if not filtered_people:
-            logger.info(f"🚫 {self.area_tipo}: Todos os dados foram filtrados (valores padrão)")
-            return
         
         current_people_dict = {}
         
-        for i, person in enumerate(filtered_people):
+        for i, person in enumerate(active_people):
             x_pos = person.get('x_pos', 0)
             y_pos = person.get('y_pos', 0) 
             
@@ -1152,60 +1117,20 @@ class AutoRecoverySingleRadarCounter:
                     avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0
                     logger.info(f"📊 DISTÂNCIA MÉDIA {self.area_tipo}: {avg_distance:.3f}m (enviada para planilha)")
                     
-                    # ✅ VERIFICA SE HOUVE MUDANÇA SIGNIFICATIVA antes de enviar
-                    current_state = {
-                        'person_count': len(active_people),
-                        'avg_distance': avg_distance,
-                        'zones': zones_str,
-                        'total_detected': self.total_people_detected
-                    }
-                    
-                    should_send = False
-                    
-                    if self.last_sent_state is None:
-                        # Primeira detecção
-                        should_send = True
-                        reason = "primeira detecção"
-                    elif current_state['person_count'] != self.last_sent_state['person_count']:
-                        # Mudança no número de pessoas
-                        should_send = True
-                        reason = f"pessoas: {self.last_sent_state['person_count']} → {current_state['person_count']}"
-                    elif abs(current_state['avg_distance'] - self.last_sent_state['avg_distance']) > self.min_change_threshold:
-                        # Mudança significativa na distância
-                        should_send = True
-                        reason = f"distância: {self.last_sent_state['avg_distance']:.1f}m → {current_state['avg_distance']:.1f}m"
-                    elif current_state['zones'] != self.last_sent_state['zones']:
-                        # Mudança de zona
-                        should_send = True
-                        reason = f"zona: {self.last_sent_state['zones']} → {current_state['zones']}"
-                    elif current_state['total_detected'] != self.last_sent_state['total_detected']:
-                        # Nova pessoa detectada (total mudou)
-                        should_send = True
-                        reason = f"novo total: {current_state['total_detected']}"
-                    elif (time.time() - self.last_significant_change) > 120:  # 2 minutos forçado
-                        # Força envio a cada 2 minutos mesmo sem mudança
-                        should_send = True
-                        reason = "envio periódico (2min)"
-                    
-                    if should_send:
-                        # ✅ FORMATO SANTA CRUZ (9 campos) - planilha separada por área
-                        row = [
-                            radar_id,                          # 1. radar_id (simples, cada área tem planilha própria)
-                            formatted_timestamp,               # 2. timestamp (CORRIGIDO)
-                            len(active_people),                # 3. person_count (real detectadas agora)
-                            person_description,                # 4. person_id (descrição profissional)
-                            zones_str,                         # 5. zone (todas as zonas ordenadas)
-                            f"{avg_distance:.1f}",             # 6. distance (média CORRIGIDA)
-                            f"{avg_confidence:.0f}",           # 7. confidence (média)
-                            self.total_people_detected,        # 8. total_detected (nossa contagem real)
-                            self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
-                        ]
-                        self.pending_data.append(row)
-                        self.last_sent_state = current_state
-                        self.last_significant_change = time.time()
-                        logger.info(f"📝 {self.area_tipo}: Dados adicionados - {reason} (buffer: {len(self.pending_data)} linhas)")
-                    else:
-                        logger.debug(f"🚫 {self.area_tipo}: Dados ignorados - sem mudança significativa")
+                    # ✅ FORMATO SANTA CRUZ (9 campos) - SEMPRE ADICIONA AO BUFFER
+                    row = [
+                        radar_id,                          # 1. radar_id (simples, cada área tem planilha própria)
+                        formatted_timestamp,               # 2. timestamp (CORRIGIDO)
+                        len(active_people),                # 3. person_count (real detectadas agora)
+                        person_description,                # 4. person_id (descrição profissional)
+                        zones_str,                         # 5. zone (todas as zonas ordenadas)
+                        f"{avg_distance:.1f}",             # 6. distance (média CORRIGIDA)
+                        f"{avg_confidence:.0f}",           # 7. confidence (média)
+                        self.total_people_detected,        # 8. total_detected (nossa contagem real)
+                        self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
+                    ]
+                    self.pending_data.append(row)
+                    logger.info(f"📝 {self.area_tipo}: Dados COM PESSOAS adicionados ao buffer (total: {len(self.pending_data)} linhas)")
 
                 print(f"\n💡 DETECTANDO {len(active_people)} pessoa(s) SIMULTANEAMENTE")
 
@@ -1233,20 +1158,8 @@ class AutoRecoverySingleRadarCounter:
             else:
                 print(f"\n👻 Nenhuma pessoa detectada no momento.")
                 
-                # ✅ SÓ ENVIA "ÁREA VAZIA" SE HAVIA PESSOAS ANTES (evita spam)
-                if (self.gsheets_manager and 
-                    len(self.previous_people) > 0 and 
-                    self.last_sent_state is not None and 
-                    self.last_sent_state['person_count'] > 0):
-                    
-                    current_state = {
-                        'person_count': 0,
-                        'avg_distance': 0,
-                        'zones': 'VAZIA',
-                        'total_detected': self.total_people_detected
-                    }
-                    
-                    # Só envia se realmente mudou de "com pessoas" para "vazia"
+                # ✅ ENVIA DADOS ZERADOS IGUAL AO SANTA CRUZ
+                if self.gsheets_manager and len(self.previous_people) > 0:
                     row = [
                         radar_id,                          # 1. radar_id (simples, cada área tem planilha própria)
                         formatted_timestamp,               # 2. timestamp
@@ -1259,11 +1172,7 @@ class AutoRecoverySingleRadarCounter:
                         self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
                     ]
                     self.pending_data.append(row)
-                    self.last_sent_state = current_state
-                    self.last_significant_change = time.time()
-                    logger.info(f"📝 {self.area_tipo}: Área ficou VAZIA - enviando transição (buffer: {len(self.pending_data)} linhas)")
-                else:
-                    logger.debug(f"🔇 {self.area_tipo}: Área vazia - sem envio (evita spam)")
+                    logger.info(f"📝 {self.area_tipo}: Dados ÁREA VAZIA adicionados ao buffer (total: {len(self.pending_data)} linhas)")
 
             print("\n" + "═" * 60)
             print("🎯 SISTEMA ROBUSTO: Detecta entradas/saídas precisamente")
@@ -1276,44 +1185,56 @@ class AutoRecoverySingleRadarCounter:
             logger.error(f"Erro ao processar dados JSON {self.area_tipo}: {e}")
 
     def send_pending_data_with_recovery(self):
-        """Envia dados para Google Sheets de forma controlada com auto-recuperação"""
+        """Envia dados em LOTES igual ao Santa Cruz - agrupa 10 linhas e envia a cada 3 minutos"""
         try:
             current_time = time.time()
             
-            # Verifica se já passou tempo suficiente desde último envio
-            if (current_time - self.last_sheets_write) < self.sheets_write_interval:
+            # Verifica se deve enviar baseado em:
+            # 1. Tempo (a cada 3 minutos) OU
+            # 2. Quantidade (10+ linhas acumuladas)
+            time_to_send = (current_time - self.last_sheets_write) >= self.sheets_write_interval
+            batch_full = len(self.pending_data) >= self.max_batch_size
+            
+            if not (time_to_send or batch_full):
                 return  # Ainda não é hora de enviar
             
             # Se não há dados pendentes, não faz nada
             if not self.pending_data or not self.gsheets_manager:
                 return
             
-            # Pega apenas os dados mais recentes (máximo 10 linhas por vez)
-            data_to_send = self.pending_data[-10:] if len(self.pending_data) > 10 else self.pending_data
+            # ✅ PEGA EXATAMENTE 10 LINHAS (ou todas se menos de 10) - igual Santa Cruz
+            data_to_send = self.pending_data[:self.max_batch_size]
             
-            # Envia em lote (mais eficiente) com auto-recovery
+            # Envia em lote único (mais eficiente que linha por linha)
             if data_to_send:
-                logger.info(f"📊 Enviando {len(data_to_send)} linhas {self.area_tipo} para Google Sheets com auto-recovery...")
+                send_reason = "lote cheio (10 linhas)" if batch_full else f"intervalo 30s ({len(data_to_send)} linhas)"
+                logger.info(f"📊 Enviando {len(data_to_send)} linhas {self.area_tipo} - {send_reason}")
                 
-                # Envia todas as linhas com retry automático
+                # ✅ ENVIA TODAS AS LINHAS DE UMA VEZ (igual Santa Cruz)
+                success_count = 0
                 for row in data_to_send:
                     success = self.gsheets_manager.append_row_with_auto_recovery(row)
                     if success:
+                        success_count += 1
                         self.last_sheets_success = datetime.now()
-                    time.sleep(0.5)  # Pequena pausa entre linhas
+                    time.sleep(0.2)  # Pausa menor para não atrapalhar
                 
-                logger.info(f"✅ {len(data_to_send)} linhas {self.area_tipo} enviadas com auto-recovery!")
+                logger.info(f"✅ {success_count}/{len(data_to_send)} linhas {self.area_tipo} enviadas com sucesso!")
                 
-                # Atualiza controles
+                # ✅ REMOVE APENAS AS LINHAS ENVIADAS (igual Santa Cruz)
+                self.pending_data = self.pending_data[len(data_to_send):]
                 self.last_sheets_write = current_time
-                self.pending_data = []  # Limpa dados enviados
+                
+                # Se ainda há dados pendentes, mostra no log
+                if self.pending_data:
+                    logger.info(f"📋 {self.area_tipo}: {len(self.pending_data)} linhas restantes no buffer")
                 
         except Exception as e:
-            logger.error(f"❌ Erro no envio {self.area_tipo} com recovery: {e}")
+            logger.error(f"❌ Erro no envio em lote {self.area_tipo}: {e}")
             # Em caso de erro, mantém dados para próxima tentativa
             if "quota" in str(e).lower() or "429" in str(e):
-                logger.warning(f"⚠️ Quota excedida {self.area_tipo} - aumentando intervalo para 60s")
-                self.sheets_write_interval = 60.0
+                logger.warning(f"⚠️ Quota excedida {self.area_tipo} - aumentando intervalo para 5min")
+                self.sheets_write_interval = 300.0  # 5 minutos
 
     def get_current_count(self):
         return len(self.current_people)
