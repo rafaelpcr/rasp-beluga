@@ -1038,19 +1038,46 @@ class AutoRecoveryRadarCounter:
                     current_people_count = len(active_people)
                     last_count = getattr(self, 'last_sent_count', -1)
                     
-                    # Só envia se houve mudança no número de pessoas ou a cada 5 minutos
+                                        # Só envia se houve mudança no número de pessoas ou a cada 5 minutos
                     time_since_last_send = time.time() - self.last_sheets_write
                     should_send = (current_people_count != last_count or 
                                  time_since_last_send > 300)  # 5 minutos
                     
-                    if should_send:
+                                        if should_send:
+                        # ✅ CALCULA DISTÂNCIA MÉDIA CORRIGIDA (mesmo fix do Gravatá)
+                        valid_distances = []
+                        for p in active_people:
+                            distance_raw = p.get('distance_raw', None)
+                            distance_smoothed = p.get('distance_smoothed', None)
+                            x = p.get('x_pos', 0)
+                            y = p.get('y_pos', 0)
+                            
+                            # SEMPRE CALCULA DISTÂNCIA DAS COORDENADAS (mais confiável)
+                            import math
+                            calculated_distance = math.sqrt(x**2 + y**2)
+                            
+                            # Usa distância calculada como padrão
+                            distance = calculated_distance
+                            
+                            # Se Arduino enviou distância, compara
+                            arduino_distance = distance_smoothed if distance_smoothed is not None else distance_raw
+                            if arduino_distance is not None and arduino_distance > 0:
+                                if abs(arduino_distance - calculated_distance) < 0.3:
+                                    # Arduino consistente, pode usar
+                                    distance = arduino_distance
+                                # Se não consistente, usa calculada (que já está definida)
+                            
+                            valid_distances.append(distance)
+                        
+                        avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0
+                        
                         row = [
                             radar_id,                          # 1. radar_id
                             formatted_timestamp,               # 2. timestamp
                             len(active_people),                # 3. person_count (real detectadas agora)
                             person_description,                # 4. person_id (descrição profissional)
                             zones_str,                         # 5. zone (todas as zonas ordenadas)
-                            f"{sum(p.get('distance_raw', p.get('distance_smoothed', 0)) for p in active_people) / len(active_people):.1f}",  # 6. distance (média) - Arduino minimal
+                            f"{avg_distance:.1f}",             # 6. distance (média CORRIGIDA)
                             f"{avg_confidence:.0f}",           # 7. confidence (média)
                             self.total_people_detected,       # 8. total_detected (nossa contagem real)
                             self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
