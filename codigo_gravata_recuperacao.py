@@ -387,6 +387,11 @@ class AutoRecoverySingleRadarCounter:
         self.sheets_write_interval = 30.0  # 30 segundos para teste - depois volta para 180s
         self.pending_data = []
         
+        # ✅ CONTROLE DE ENVIOS REPETITIVOS
+        self.last_sent_state = None  # Último estado enviado
+        self.min_change_threshold = 0.1  # Mudança mínima para enviar (metros)
+        self.last_significant_change = time.time()  # Última mudança significativa
+        
         # Estatísticas detalhadas
         self.entries_count = 0
         self.exits_count = 0
@@ -847,90 +852,112 @@ class AutoRecoverySingleRadarCounter:
             return "N/A"
 
     def update_people_count(self, person_count, active_people):
-        """Sistema CORRIGIDO de tracking para eventos - lógica precisa de entrada/saída"""
+        """Sistema MELHORADO de tracking - evita contagem duplicada e valores padrão"""
         current_time = time.time()
+        
+        # ✅ FILTRA DADOS SUSPEITOS (valores padrão do Arduino)
+        filtered_people = []
+        for person in active_people:
+            x_pos = person.get('x_pos', 0)
+            y_pos = person.get('y_pos', 0)
+            distance_raw = person.get('distance_raw', None)
+            distance_smoothed = person.get('distance_smoothed', None)
+            confidence = person.get('confidence', 0)
+            
+            # ✅ REJEITA dados suspeitos de serem valores padrão
+            is_suspicious = (
+                # Distância exatamente 0.9 (valor padrão comum)
+                (distance_smoothed == 0.9 or distance_raw == 0.9) or
+                # Confiança exatamente 85% (muito comum para ser real)
+                confidence == 85 or
+                # Posição exatamente no centro (0,0)
+                (x_pos == 0 and y_pos == 0) or
+                # Confiança muito baixa
+                confidence < 50
+            )
+            
+            if not is_suspicious:
+                filtered_people.append(person)
+            else:
+                logger.warning(f"⚠️ DADOS SUSPEITOS {self.area_tipo}: X={x_pos} Y={y_pos} D={distance_smoothed or distance_raw} C={confidence}% - IGNORADO")
+        
+        # Se todos os dados foram filtrados, não atualiza nada
+        if not filtered_people:
+            logger.info(f"🚫 {self.area_tipo}: Todos os dados foram filtrados (valores padrão)")
+            return
         
         current_people_dict = {}
         
-        for i, person in enumerate(active_people):
+        for i, person in enumerate(filtered_people):
             x_pos = person.get('x_pos', 0)
             y_pos = person.get('y_pos', 0) 
             
-            # Verifica campos de distância disponíveis
+            # Usa a melhor distância disponível
             distance_raw = person.get('distance_raw', None)
             distance_smoothed = person.get('distance_smoothed', None)
             
-            # Usa a melhor distância disponível
             if distance_smoothed is not None and distance_smoothed > 0:
                 distance = distance_smoothed
             elif distance_raw is not None and distance_raw > 0:
                 distance = distance_raw
             else:
-                # Calcula das coordenadas se não há distância do Arduino
                 import math
                 distance = math.sqrt(x_pos**2 + y_pos**2)
             
-            # ✅ CALCULA ZONA ESPECÍFICA DA ÁREA usando coordenadas x,y
+            # Calcula zona
             zone = self.zone_manager.get_zone(x_pos, y_pos)
-            person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
+            person["zone"] = zone
             
-            # ID baseado na posição arredondada (estável para pessoa parada)
-            stable_id = f"P_{self.area_tipo}_{zone}_{distance:.1f}_{i}"
+            # ✅ ID mais estável baseado em posição arredondada (reduz duplicatas)
+            pos_x_round = round(x_pos, 1)  # Arredonda para 1 casa decimal
+            pos_y_round = round(y_pos, 1)
+            stable_id = f"P_{self.area_tipo}_{zone}_{pos_x_round}_{pos_y_round}"
             
-            # Procura se já existe pessoa similar (mesma zona, distância similar)
+            # Verifica se já existe pessoa muito próxima
             found_existing = None
             for existing_id, existing_person in self.current_people.items():
-                existing_dist = existing_person.get('distance_smoothed')
-                if existing_dist is None:
-                    existing_dist = existing_person.get('distance_raw')
-                if existing_dist is None:
-                    # Calcula das coordenadas se não tem distância
-                    existing_x = existing_person.get('x_pos', 0)
-                    existing_y = existing_person.get('y_pos', 0)
-                    existing_dist = math.sqrt(existing_x**2 + existing_y**2)
-                    
+                existing_x = existing_person.get('x_pos', 0)
+                existing_y = existing_person.get('y_pos', 0)
                 existing_zone = existing_person.get('zone', '')
                 
-                if (existing_zone == zone and 
-                    abs(existing_dist - distance) < 0.3):
+                # Considera mesma pessoa se:
+                # 1. Mesma zona
+                # 2. Distância < 50cm
+                distance_between = math.sqrt((x_pos - existing_x)**2 + (y_pos - existing_y)**2)
+                
+                if (existing_zone == zone and distance_between < 0.5):
                     found_existing = existing_id
                     break
             
             if found_existing:
+                # Atualiza pessoa existente
                 current_people_dict[found_existing] = person
                 current_people_dict[found_existing]['last_seen'] = current_time
             else:
+                # Nova pessoa
                 person['first_seen'] = current_time
                 person['last_seen'] = current_time
                 current_people_dict[stable_id] = person
         
-        # Detecta ENTRADAS REAIS
+        # ✅ DETECTA ENTRADAS REAIS (só conta se realmente nova)
         new_entries = []
         for person_id, person_info in current_people_dict.items():
             if person_id not in self.current_people:
+                # Verifica se não é apenas uma continuação de detecção anterior
                 is_really_new = True
+                
+                # Compara com pessoas que saíram recentemente (até 5 segundos)
                 for old_id, old_person in self.previous_people.items():
-                    old_zone = old_person.get('zone', '')
-                    old_dist = old_person.get('distance_smoothed')
-                    if old_dist is None:
-                        old_dist = old_person.get('distance_raw')
-                    if old_dist is None:
-                        old_x = old_person.get('x_pos', 0)
-                        old_y = old_person.get('y_pos', 0)
-                        old_dist = math.sqrt(old_x**2 + old_y**2)
-                        
-                    new_zone = person_info.get('zone', '')
-                    new_dist = person_info.get('distance_smoothed')
-                    if new_dist is None:
-                        new_dist = person_info.get('distance_raw')
-                    if new_dist is None:
-                        new_x = person_info.get('x_pos', 0)
-                        new_y = person_info.get('y_pos', 0)
-                        new_dist = math.sqrt(new_x**2 + new_y**2)
+                    old_x = old_person.get('x_pos', 0)
+                    old_y = old_person.get('y_pos', 0)
+                    new_x = person_info.get('x_pos', 0)
+                    new_y = person_info.get('y_pos', 0)
                     
-                    if (old_zone == new_zone and 
-                        abs(old_dist - new_dist) < 0.5 and
-                        (current_time - old_person.get('last_seen', 0)) < 1.0):
+                    distance_between = math.sqrt((new_x - old_x)**2 + (new_y - old_y)**2)
+                    time_since_old = current_time - old_person.get('last_seen', 0)
+                    
+                    # Se muito próximo e há pouco tempo, é continuação
+                    if distance_between < 0.3 and time_since_old < 5.0:
                         is_really_new = False
                         break
                 
@@ -940,20 +967,22 @@ class AutoRecoverySingleRadarCounter:
                     self.entries_count += 1
                     self.unique_people_today.add(person_id)
                     zone = person_info.get('zone', 'DESCONHECIDA')
-                    dist = person_info.get('distance_smoothed', 0)
-                    logger.info(f"🆕 ENTRADA {self.area_tipo}: {zone} {dist:.1f}m (Total: {self.total_people_detected})")
+                    x = person_info.get('x_pos', 0)
+                    y = person_info.get('y_pos', 0)
+                    logger.info(f"🆕 ENTRADA REAL {self.area_tipo}: {zone} X={x:.2f} Y={y:.2f} (Total: {self.total_people_detected})")
         
-        # Detecta SAÍDAS REAIS
+        # Detecta SAÍDAS
         exits = []
         for person_id, person_info in self.current_people.items():
             if person_id not in current_people_dict:
                 last_seen = person_info.get('last_seen', 0)
-                if (current_time - last_seen) > 1.0:
+                if (current_time - last_seen) > 2.0:  # 2 segundos timeout
                     exits.append(person_id)
                     self.exits_count += 1
                     zone = person_info.get('zone', 'DESCONHECIDA')
-                    dist = person_info.get('distance_smoothed', 0)
-                    logger.info(f"🚪 SAÍDA {self.area_tipo}: {zone} {dist:.1f}m")
+                    x = person_info.get('x_pos', 0)
+                    y = person_info.get('y_pos', 0)
+                    logger.info(f"🚪 SAÍDA {self.area_tipo}: {zone} X={x:.2f} Y={y:.2f}")
         
         # Atualiza estado
         self.previous_people = self.current_people.copy()
@@ -1116,27 +1145,67 @@ class AutoRecoverySingleRadarCounter:
                             source = "calculada"
                         
                         # DEBUG: Mostra qual distância está sendo usada
-                        logger.info(f"🔍 DISTÂNCIA {self.area_tipo} Pessoa {i}: {distance:.3f}m ({source}) | X={x:.2f} Y={y:.2f}")
+                        logger.info(f"🔍 DISTÂNCIA {self.area_tipo} Pessoa {i}: {distance:.3f}m ({source}) | X={x:.2f} Y={y:.2f} | C={p.get('confidence', 0)}%")
                         
                         valid_distances.append(distance)
                     
                     avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0
                     logger.info(f"📊 DISTÂNCIA MÉDIA {self.area_tipo}: {avg_distance:.3f}m (enviada para planilha)")
                     
-                    # ✅ FORMATO SANTA CRUZ (9 campos) - planilha separada por área
-                    row = [
-                        radar_id,                          # 1. radar_id (simples, cada área tem planilha própria)
-                        formatted_timestamp,               # 2. timestamp (CORRIGIDO)
-                        len(active_people),                # 3. person_count (real detectadas agora)
-                        person_description,                # 4. person_id (descrição profissional)
-                        zones_str,                         # 5. zone (todas as zonas ordenadas)
-                        f"{avg_distance:.1f}",             # 6. distance (média CORRIGIDA)
-                        f"{avg_confidence:.0f}",           # 7. confidence (média)
-                        self.total_people_detected,        # 8. total_detected (nossa contagem real)
-                        self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
-                    ]
-                    self.pending_data.append(row)
-                    logger.info(f"📝 {self.area_tipo}: Dados COM PESSOAS adicionados ao buffer (total: {len(self.pending_data)} linhas)")
+                    # ✅ VERIFICA SE HOUVE MUDANÇA SIGNIFICATIVA antes de enviar
+                    current_state = {
+                        'person_count': len(active_people),
+                        'avg_distance': avg_distance,
+                        'zones': zones_str,
+                        'total_detected': self.total_people_detected
+                    }
+                    
+                    should_send = False
+                    
+                    if self.last_sent_state is None:
+                        # Primeira detecção
+                        should_send = True
+                        reason = "primeira detecção"
+                    elif current_state['person_count'] != self.last_sent_state['person_count']:
+                        # Mudança no número de pessoas
+                        should_send = True
+                        reason = f"pessoas: {self.last_sent_state['person_count']} → {current_state['person_count']}"
+                    elif abs(current_state['avg_distance'] - self.last_sent_state['avg_distance']) > self.min_change_threshold:
+                        # Mudança significativa na distância
+                        should_send = True
+                        reason = f"distância: {self.last_sent_state['avg_distance']:.1f}m → {current_state['avg_distance']:.1f}m"
+                    elif current_state['zones'] != self.last_sent_state['zones']:
+                        # Mudança de zona
+                        should_send = True
+                        reason = f"zona: {self.last_sent_state['zones']} → {current_state['zones']}"
+                    elif current_state['total_detected'] != self.last_sent_state['total_detected']:
+                        # Nova pessoa detectada (total mudou)
+                        should_send = True
+                        reason = f"novo total: {current_state['total_detected']}"
+                    elif (time.time() - self.last_significant_change) > 120:  # 2 minutos forçado
+                        # Força envio a cada 2 minutos mesmo sem mudança
+                        should_send = True
+                        reason = "envio periódico (2min)"
+                    
+                    if should_send:
+                        # ✅ FORMATO SANTA CRUZ (9 campos) - planilha separada por área
+                        row = [
+                            radar_id,                          # 1. radar_id (simples, cada área tem planilha própria)
+                            formatted_timestamp,               # 2. timestamp (CORRIGIDO)
+                            len(active_people),                # 3. person_count (real detectadas agora)
+                            person_description,                # 4. person_id (descrição profissional)
+                            zones_str,                         # 5. zone (todas as zonas ordenadas)
+                            f"{avg_distance:.1f}",             # 6. distance (média CORRIGIDA)
+                            f"{avg_confidence:.0f}",           # 7. confidence (média)
+                            self.total_people_detected,        # 8. total_detected (nossa contagem real)
+                            self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
+                        ]
+                        self.pending_data.append(row)
+                        self.last_sent_state = current_state
+                        self.last_significant_change = time.time()
+                        logger.info(f"📝 {self.area_tipo}: Dados adicionados - {reason} (buffer: {len(self.pending_data)} linhas)")
+                    else:
+                        logger.debug(f"🚫 {self.area_tipo}: Dados ignorados - sem mudança significativa")
 
                 print(f"\n💡 DETECTANDO {len(active_people)} pessoa(s) SIMULTANEAMENTE")
 
@@ -1163,9 +1232,21 @@ class AutoRecoverySingleRadarCounter:
 
             else:
                 print(f"\n👻 Nenhuma pessoa detectada no momento.")
-
-                # ✅ ENVIA DADOS ZERADOS IGUAL AO SANTA CRUZ
-                if self.gsheets_manager and len(self.previous_people) > 0:
+                
+                # ✅ SÓ ENVIA "ÁREA VAZIA" SE HAVIA PESSOAS ANTES (evita spam)
+                if (self.gsheets_manager and 
+                    len(self.previous_people) > 0 and 
+                    self.last_sent_state is not None and 
+                    self.last_sent_state['person_count'] > 0):
+                    
+                    current_state = {
+                        'person_count': 0,
+                        'avg_distance': 0,
+                        'zones': 'VAZIA',
+                        'total_detected': self.total_people_detected
+                    }
+                    
+                    # Só envia se realmente mudou de "com pessoas" para "vazia"
                     row = [
                         radar_id,                          # 1. radar_id (simples, cada área tem planilha própria)
                         formatted_timestamp,               # 2. timestamp
@@ -1178,7 +1259,11 @@ class AutoRecoverySingleRadarCounter:
                         self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
                     ]
                     self.pending_data.append(row)
-                    logger.info(f"📝 {self.area_tipo}: Dados ÁREA VAZIA adicionados ao buffer (total: {len(self.pending_data)} linhas)")
+                    self.last_sent_state = current_state
+                    self.last_significant_change = time.time()
+                    logger.info(f"📝 {self.area_tipo}: Área ficou VAZIA - enviando transição (buffer: {len(self.pending_data)} linhas)")
+                else:
+                    logger.debug(f"🔇 {self.area_tipo}: Área vazia - sem envio (evita spam)")
 
             print("\n" + "═" * 60)
             print("🎯 SISTEMA ROBUSTO: Detecta entradas/saídas precisamente")
