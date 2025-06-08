@@ -416,7 +416,7 @@ class AutoRecoverySingleRadarCounter:
         
         # Configurações anti-quota (intervalos maiores para melhor detecção)
         self.last_sheets_write = 0
-        self.sheets_write_interval = 180.0  # 3 minutos para evitar quota
+        self.sheets_write_interval = 30.0  # 30 segundos para teste - depois volta para 180s
         self.pending_data = []
         
         # Estatísticas detalhadas
@@ -1034,6 +1034,10 @@ class AutoRecoverySingleRadarCounter:
             next_send_in = max(0, self.sheets_write_interval - time_since_last_send)
             if pending_count > 0:
                 print(f"📋 BUFFER: {pending_count} linhas | ⏳ Próximo envio em: {next_send_in:.0f}s")
+                # DEBUG: Mostra última linha do buffer
+                if self.pending_data:
+                    last_row = self.pending_data[-1]
+                    print(f"🔍 ÚLTIMA LINHA: {last_row[:3]}... (radar_id, timestamp, person_count)")
             else:
                 print(f"📋 PLANILHA: Sincronizada ✅")
 
@@ -1157,6 +1161,7 @@ class AutoRecoverySingleRadarCounter:
                         self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
                     ]
                     self.pending_data.append(row)
+                    logger.info(f"📝 {self.area_tipo}: Dados COM PESSOAS adicionados ao buffer (total: {len(self.pending_data)} linhas)")
 
                 print(f"\n💡 DETECTANDO {len(active_people)} pessoa(s) SIMULTANEAMENTE")
 
@@ -1198,6 +1203,7 @@ class AutoRecoverySingleRadarCounter:
                         self.max_simultaneous_people       # 9. max_simultaneous (nosso máximo real)
                     ]
                     self.pending_data.append(row)
+                    logger.info(f"📝 {self.area_tipo}: Dados ÁREA VAZIA adicionados ao buffer (total: {len(self.pending_data)} linhas)")
 
             print("\n" + "═" * 60)
             print("🎯 SISTEMA ROBUSTO: Detecta entradas/saídas precisamente")
