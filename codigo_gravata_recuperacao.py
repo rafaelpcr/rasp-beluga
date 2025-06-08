@@ -296,9 +296,6 @@ class ZoneManager:
         """Determinar zona MELHORADA - prioriza posição X e distância"""
         distance = self.get_distance(x, y)
         
-        # Debug temporário para mostrar teste de zonas
-        debug_info = []
-        
         if self.area_tipo == 'EXTERNA':
             # Área externa: verifica posição e distância
             for zona_name, config in self.ZONA_CONFIGS.items():
@@ -314,67 +311,45 @@ class ZoneManager:
                 return 'AREA_PASSAGEM'
         
         else:  # INTERNA - LÓGICA MELHORADA
-            # ✅ PRIMEIRO: Testa todas as zonas específicas
+            # Testa todas as zonas específicas
             for zona_name, config in self.ZONA_CONFIGS.items():
                 x_ok = config['x_min'] <= x <= config['x_max']
                 y_ok = config['y_min'] <= y <= config['y_max']
                 dist_ok = config['distance_range'][0] <= distance <= config['distance_range'][1]
                 
-                debug_info.append(f"{zona_name}: X({x_ok}) Y({y_ok}) D({dist_ok})")
-                
                 if x_ok and y_ok and dist_ok:
-                    logger.info(f"🎯 ZONA ENCONTRADA por configuração específica: {zona_name}")
-                    logger.info(f"   Testes: {' | '.join(debug_info)}")
                     return zona_name
             
-            # ✅ SEGUNDO: Fallback baseado PRINCIPALMENTE na posição X e distância
-            logger.info(f"🔄 FALLBACK ATIVADO - Nenhuma zona específica encontrada")
-            logger.info(f"   Testes realizados: {' | '.join(debug_info)}")
+            # Fallback baseado na posição X e distância
             
             if x < -0.8:  # LADO ESQUERDO
-                logger.info(f"📍 FALLBACK: LADO ESQUERDO (X={x:.2f} < -0.8)")
                 if distance <= 3.0:
-                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 3.0m → SALA_REBOCO")
                     return 'SALA_REBOCO'
                 elif distance <= 7.0:
-                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 7.0m → IGREJINHA")
                     return 'IGREJINHA'
                 else:
-                    logger.info(f"   ❌ Distância {distance:.2f}m > 7.0m → FORA_ATIVACOES")
                     return 'FORA_ATIVACOES'
                     
             elif x > 0.8:  # LADO DIREITO
-                logger.info(f"📍 FALLBACK: LADO DIREITO (X={x:.2f} > 0.8)")
                 if distance <= 2.5:
-                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 2.5m → BEIJO")
                     return 'BEIJO'
                 elif distance <= 5.0:
-                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 5.0m → PESCARIA")
                     return 'PESCARIA'
                 elif distance <= 8.0:
-                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 8.0m → ARGOLA")
                     return 'ARGOLA'
                 else:
-                    logger.info(f"   ❌ Distância {distance:.2f}m > 8.0m → FORA_ATIVACOES")
                     return 'FORA_ATIVACOES'
                     
             else:  # CENTRO (-0.8 <= X <= 0.8)
-                logger.info(f"📍 FALLBACK: ZONA CENTRAL (-0.8 ≤ X={x:.2f} ≤ 0.8)")
                 if distance <= 1.5:
-                    logger.info(f"   ✅ Distância {distance:.2f}m ≤ 1.5m → CENTRO")
-                    return 'CENTRO'  # Só muito próximo é centro
+                    return 'CENTRO'
                 elif distance <= 4.0:
                     # Baseado em Y para decidir se vai para lado esquerdo ou direito
                     if y > 2.5:
-                        result = 'IGREJINHA' if x < 0 else 'ARGOLA'
-                        logger.info(f"   ✅ Y={y:.2f} > 2.5, X={'<0' if x<0 else '≥0'} → {result}")
-                        return result
+                        return 'IGREJINHA' if x < 0 else 'ARGOLA'
                     else:
-                        result = 'SALA_REBOCO' if x < 0 else 'BEIJO'
-                        logger.info(f"   ✅ Y={y:.2f} ≤ 2.5, X={'<0' if x<0 else '≥0'} → {result}")
-                        return result
+                        return 'SALA_REBOCO' if x < 0 else 'BEIJO'
                 else:
-                    logger.info(f"   ❌ Distância {distance:.2f}m > 4.0m → FORA_ATIVACOES")
                     return 'FORA_ATIVACOES'
     
     def get_distance(self, x, y):
@@ -435,8 +410,8 @@ class AutoRecoverySingleRadarCounter:
         self.session_start_time = datetime.now()
         
         # Configurações de tracking
-        self.exit_timeout = 3.0
-        self.reentry_timeout = 10.0
+        self.exit_timeout = 1.0
+        self.reentry_timeout = 3.0
         self.last_update_time = time.time()
         
         # Configurações anti-quota (intervalos maiores para melhor detecção)
@@ -787,9 +762,7 @@ class AutoRecoverySingleRadarCounter:
                             
                             try:
                                 data_json = json.loads(line)
-                                self.process_json_data(data_json)
-                                # DELAY DE 3 SEGUNDOS ENTRE PROCESSAMENTOS para melhor detecção
-                                time.sleep(3.0)  
+                                self.process_json_data(data_json)  
                             except json.JSONDecodeError:
                                 logger.debug(f"JSON inválido: {line[:50]}...")
                             except Exception as e:
@@ -840,18 +813,11 @@ class AutoRecoverySingleRadarCounter:
     def convert_timestamp(self, timestamp_ms):
         """Converte timestamp de milissegundos para formato brasileiro"""
         try:
-            if timestamp_ms and timestamp_ms > 0:
-                # Converte milissegundos para segundos e cria datetime
-                timestamp_seconds = timestamp_ms / 1000.0
-                dt = datetime.fromtimestamp(timestamp_seconds)
-                return dt.strftime('%d/%m/%Y %H:%M:%S')
-            else:
-                # Fallback para horário atual se timestamp inválido
-                dt = datetime.now()
-                return dt.strftime('%d/%m/%Y %H:%M:%S')
+            # Sempre usa horário atual para garantir timestamp correto
+            dt = datetime.now()
+            return dt.strftime('%d/%m/%Y %H:%M:%S')
         except Exception as e:
-            logger.debug(f"Erro na conversão de timestamp {timestamp_ms}: {e}")
-            # Fallback para horário atual
+            logger.debug(f"Erro na conversão de timestamp: {e}")
             return datetime.now().strftime('%d/%m/%Y %H:%M:%S')
 
     def format_duration(self, duration_ms):
@@ -881,36 +847,19 @@ class AutoRecoverySingleRadarCounter:
             x_pos = person.get('x_pos', 0)
             y_pos = person.get('y_pos', 0) 
             
-            # 🔍 DEBUG: Verifica campos de distância disponíveis
+            # Verifica campos de distância disponíveis
             distance_raw = person.get('distance_raw', None)
             distance_smoothed = person.get('distance_smoothed', None)
             
-            # Debug detalhado dos dados recebidos
-            logger.info(f"🔍 DEBUG {self.area_tipo} Pessoa {i}: campos recebidos do Arduino:")
-            logger.info(f"   distance_raw: {distance_raw}")
-            logger.info(f"   distance_smoothed: {distance_smoothed}")
-            logger.info(f"   x_pos: {x_pos}, y_pos: {y_pos}")
-            logger.info(f"   outros campos: {list(person.keys())}")
-            
-            # SEMPRE CALCULA DISTÂNCIA DAS COORDENADAS (mais confiável)
-            import math
-            calculated_distance = math.sqrt(x_pos**2 + y_pos**2)
-            
-            # Usa distância calculada como padrão, comparando com Arduino
-            distance = calculated_distance
-            
-            # Se Arduino enviou distância, compara
-            arduino_distance = distance_smoothed if distance_smoothed is not None else distance_raw
-            if arduino_distance is not None and arduino_distance > 0:
-                if abs(arduino_distance - calculated_distance) < 0.3:
-                    # Arduino está consistente, pode usar
-                    distance = arduino_distance
-                    logger.info(f"   ✅ Arduino consistente: {arduino_distance:.2f}m (calculada: {calculated_distance:.2f}m)")
-                else:
-                    # Arduino suspeito, usa calculada
-                    logger.warning(f"   ⚠️ Arduino suspeito: {arduino_distance:.2f}m vs calculada: {calculated_distance:.2f}m - USANDO CALCULADA")
+            # Usa a melhor distância disponível
+            if distance_smoothed is not None and distance_smoothed > 0:
+                distance = distance_smoothed
+            elif distance_raw is not None and distance_raw > 0:
+                distance = distance_raw
             else:
-                logger.info(f"   🔧 Arduino sem distância, usando calculada: {distance:.2f}m")
+                # Calcula das coordenadas se não há distância do Arduino
+                import math
+                distance = math.sqrt(x_pos**2 + y_pos**2)
             
             # ✅ CALCULA ZONA ESPECÍFICA DA ÁREA usando coordenadas x,y
             zone = self.zone_manager.get_zone(x_pos, y_pos)
@@ -972,7 +921,7 @@ class AutoRecoverySingleRadarCounter:
                     
                     if (old_zone == new_zone and 
                         abs(old_dist - new_dist) < 0.5 and
-                        (current_time - old_person.get('last_seen', 0)) < 2.0):
+                        (current_time - old_person.get('last_seen', 0)) < 1.0):
                         is_really_new = False
                         break
                 
@@ -1012,23 +961,12 @@ class AutoRecoverySingleRadarCounter:
     def process_json_data(self, data_json):
         """Processa dados JSON IGUAL AO SANTA CRUZ com área específica"""
         try:
-            # 🔍 DEBUG: Mostra JSON completo recebido do Arduino
-            logger.info(f"🔍 JSON COMPLETO {self.area_tipo}: {data_json}")
-            
             radar_id = data_json.get("radar_id", self.radar_id)
             timestamp_ms = data_json.get("timestamp_ms", 0)
             person_count = data_json.get("person_count", 0)
             active_people = data_json.get("active_people", [])
             
-            # Debug dos campos principais
-            logger.info(f"🔍 CAMPOS PRINCIPAIS {self.area_tipo}:")
-            logger.info(f"   radar_id: {radar_id}")
-            logger.info(f"   timestamp_ms: {timestamp_ms}")
-            logger.info(f"   person_count: {person_count}")
-            logger.info(f"   active_people count: {len(active_people)}")
-
             formatted_timestamp = self.convert_timestamp(timestamp_ms)
-            logger.info(f"🔍 TIMESTAMP {self.area_tipo}: {timestamp_ms}ms → {formatted_timestamp}")
 
             # Atualiza contadores locais
             self.update_people_count(person_count, active_people)
@@ -1071,7 +1009,7 @@ class AutoRecoverySingleRadarCounter:
                 for i, person in enumerate(active_people):
                     confidence = person.get("confidence", 0)
                     
-                    # 🔍 DEBUG: Examina campos de distância mais detalhadamente
+                    # Campos básicos
                     distance_raw = person.get("distance_raw", None)
                     distance_smoothed = person.get("distance_smoothed", None)
                     distance_final = distance_smoothed if distance_smoothed is not None else distance_raw
@@ -1079,31 +1017,13 @@ class AutoRecoverySingleRadarCounter:
                     x_pos = person.get("x_pos", 0)
                     y_pos = person.get("y_pos", 0)
                     stationary = person.get("stationary", False)
-                    
-                    # Debug de todos os campos recebidos do Arduino
-                    logger.info(f"🔍 DISPLAY DEBUG {self.area_tipo} Pessoa {i}:")
-                    logger.info(f"   JSON completo: {person}")
-                    logger.info(f"   distance_raw: {distance_raw}")
-                    logger.info(f"   distance_smoothed: {distance_smoothed}")
-                    logger.info(f"   distance_final: {distance_final}")
 
-                    # ✅ CALCULA ZONA MELHORADA (com debug detalhado)
+                    # Calcula zona
                     zone = self.zone_manager.get_zone(x_pos, y_pos)
-                    person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
+                    person["zone"] = zone
 
-                    # 🔍DEBUG DETALHADO: Mostra todo o processo de cálculo
+                    # Calcula distância
                     calculated_distance = self.zone_manager.get_distance(x_pos, y_pos)
-                    logger.info(f"🔍 DEBUG {self.area_tipo}: X={x_pos:.2f}, Y={y_pos:.2f}")
-                    logger.info(f"   📏 Distância calculada: {calculated_distance:.2f}m (Arduino raw: {distance_raw}, smoothed: {distance_smoothed})")
-                    logger.info(f"   🎯 Zona determinada: {zone}")
-                    
-                    # Mostra qual lógica foi aplicada
-                    if x_pos < -0.8:
-                        logger.info(f"   📍 Lógica: LADO ESQUERDO (X < -0.8)")
-                    elif x_pos > 0.8:
-                        logger.info(f"   📍 Lógica: LADO DIREITO (X > 0.8)")
-                    else:
-                        logger.info(f"   📍 Lógica: CENTRO (-0.8 ≤ X ≤ 0.8)")
 
                     # Encontra ID da nossa lógica interna (igual Santa Cruz)
                     our_person_id = None
@@ -1133,15 +1053,14 @@ class AutoRecoverySingleRadarCounter:
                     status = "Parado" if stationary else "Móvel"
                     pos_str = f"{x_pos:.2f},{y_pos:.2f}"  # ✅ Mais precisão nas coordenadas
                     
-                    # Usa a distância correta (prioriza calculated se Arduino está dando valores estranhos)
-                    display_distance = distance_final if distance_final is not None and distance_final > 0 else calculated_distance
+                    # Usa distância do Arduino se disponível, senão usa calculada
+                    if distance_final is not None and distance_final > 0:
+                        display_distance = distance_final
+                    else:
+                        display_distance = calculated_distance
 
                     zone_desc = self.zone_manager.get_zone_description(zone)[:14]
                     print(f"{zone_desc:<15} {display_distance:<7.2f} {pos_str:<12} {confidence:<5}% {status:<8} {time_str:<8}")
-                    
-                    # ⚠️ ALERTA se distância do Arduino suspeita
-                    if distance_final is not None and abs(distance_final - calculated_distance) > 0.5:
-                        logger.warning(f"⚠️ Discrepância de distância: Arduino={distance_final:.2f}m vs Calculada={calculated_distance:.2f}m")
 
                 # ✅ ENVIA DADOS IGUAL AO SANTA CRUZ (formato de 9 campos)
                 if self.gsheets_manager:
@@ -1163,44 +1082,26 @@ class AutoRecoverySingleRadarCounter:
                     else:
                         person_description = "Multidão"
 
-                    # ✅ CALCULA DISTÂNCIA MÉDIA CORRIGIDA
+                    # Calcula distância média
                     valid_distances = []
-                    for i, p in enumerate(active_people):
+                    for p in active_people:
                         distance_raw = p.get('distance_raw', None)
                         distance_smoothed = p.get('distance_smoothed', None)
                         x = p.get('x_pos', 0)
                         y = p.get('y_pos', 0)
                         
-                        # 🔍 DEBUG CRÍTICO: Mostra exatamente o que está sendo usado
-                        logger.error(f"🔍 PLANILHA DEBUG {self.area_tipo} Pessoa {i}:")
-                        logger.error(f"   distance_raw do Arduino: {distance_raw}")
-                        logger.error(f"   distance_smoothed do Arduino: {distance_smoothed}")
-                        logger.error(f"   x_pos: {x}, y_pos: {y}")
-                        
-                        # Prioriza distância smoothed, depois raw
-                        distance = distance_smoothed if distance_smoothed is not None else distance_raw
-                        
-                        # Se não há distância válida do Arduino, calcula das coordenadas
-                        if distance is None or distance == 0:
-                            import math
-                            calculated_distance = math.sqrt(x**2 + y**2)
-                            distance = calculated_distance
-                            logger.error(f"   ⚠️ USANDO DISTÂNCIA CALCULADA: {distance:.3f}m")
+                        # Prioriza distância smoothed, depois raw, depois calculada
+                        if distance_smoothed is not None and distance_smoothed > 0:
+                            distance = distance_smoothed
+                        elif distance_raw is not None and distance_raw > 0:
+                            distance = distance_raw
                         else:
-                            # Verifica se o Arduino está enviando sempre o mesmo valor
                             import math
-                            calculated_distance = math.sqrt(x**2 + y**2)
-                            if abs(distance - calculated_distance) > 0.5:
-                                logger.error(f"   ⚠️ DISCREPÂNCIA! Arduino: {distance:.3f}m vs Calculada: {calculated_distance:.3f}m")
-                                logger.error(f"   🔧 PROBLEMA: Arduino pode estar enviando valor padrão fixo!")
-                            else:
-                                logger.error(f"   ✅ ARDUINO OK: {distance:.3f}m (calculada: {calculated_distance:.3f}m)")
+                            distance = math.sqrt(x**2 + y**2)
                         
-                        logger.error(f"   📊 DISTÂNCIA FINAL PARA PLANILHA: {distance:.3f}m")
                         valid_distances.append(distance)
                     
                     avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0
-                    logger.error(f"🔍 DISTÂNCIA MÉDIA PARA PLANILHA {self.area_tipo}: {avg_distance:.3f}m")
                     
                     # ✅ FORMATO SANTA CRUZ (9 campos) - planilha separada por área
                     row = [
