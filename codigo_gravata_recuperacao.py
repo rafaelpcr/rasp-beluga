@@ -384,7 +384,7 @@ class AutoRecoverySingleRadarCounter:
         
         # ✅ SISTEMA DE LOTES IGUAL AO SANTA CRUZ
         self.last_sheets_write = 0
-        self.sheets_write_interval = 30.0  # 30 segundos para teste - depois 180s (3min)
+        self.sheets_write_interval = 180.0  # 180s (3min) igual ao Santa Cruz
         self.pending_data = []
         self.max_batch_size = 10  # Máximo 10 linhas por lote (igual Santa Cruz)
         
@@ -748,11 +748,7 @@ class AutoRecoverySingleRadarCounter:
                     
                     text = data.decode('utf-8', errors='ignore')
                     
-                    # DEBUG TEMPORÁRIO: Mostra TODOS os dados recebidos
-                    if text.strip():
-                        logger.info(f"🔍 DADOS BRUTOS {self.area_tipo}: {repr(text)}")
-                    
-                    buffer += text
+                                        buffer += text
                     
                     if '\n' in buffer:
                         lines = buffer.split('\n')
@@ -760,23 +756,18 @@ class AutoRecoverySingleRadarCounter:
                         
                         for line in lines[:-1]:
                             line = line.strip()
-                            logger.info(f"🔍 LINHA {self.area_tipo}: {repr(line)}")
-                            
-                            if not line:
+                            if not line or not line.startswith('{'):
                                 continue
                                 
-                            # DEBUG: Tenta processar qualquer linha que pareça JSON
-                            if line.startswith('{') and line.endswith('}'):
-                                try:
-                                    data_json = json.loads(line)
-                                    logger.info(f"✅ JSON VÁLIDO {self.area_tipo}: {data_json}")
-                                    self.process_json_data(data_json)
-                                except json.JSONDecodeError as e:
-                                    logger.error(f"❌ JSON INVÁLIDO {self.area_tipo}: {line[:100]} | Erro: {e}")
-                                except Exception as e:
-                                    logger.error(f"❌ ERRO PROCESSANDO {self.area_tipo}: {e}")
-                            else:
-                                logger.warning(f"⚠️ LINHA NÃO-JSON {self.area_tipo}: {line[:50]}...")
+                            try:
+                                data_json = json.loads(line)
+                                self.process_json_data(data_json)
+                                # ✅ DELAY DE 3 SEGUNDOS IGUAL AO SANTA CRUZ para melhor visualização
+                                time.sleep(3.0)
+                            except json.JSONDecodeError:
+                                logger.debug(f"JSON inválido: {line[:50]}...")
+                            except Exception as e:
+                                logger.error(f"Erro processando JSON: {e}")
                 
                 time.sleep(0.01)
                 
@@ -1109,13 +1100,9 @@ class AutoRecoverySingleRadarCounter:
                             distance = math.sqrt(x**2 + y**2)
                             source = "calculada"
                         
-                        # DEBUG: Mostra qual distância está sendo usada
-                        logger.info(f"🔍 DISTÂNCIA {self.area_tipo} Pessoa {i}: {distance:.3f}m ({source}) | X={x:.2f} Y={y:.2f} | C={p.get('confidence', 0)}%")
-                        
                         valid_distances.append(distance)
                     
                     avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0
-                    logger.info(f"📊 DISTÂNCIA MÉDIA {self.area_tipo}: {avg_distance:.3f}m (enviada para planilha)")
                     
                     # ✅ FORMATO SANTA CRUZ (9 campos) - SEMPRE ADICIONA AO BUFFER
                     row = [
