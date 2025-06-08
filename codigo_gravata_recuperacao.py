@@ -455,8 +455,29 @@ class AutoRecoverySingleRadarCounter:
         
         # 1. Verifica recebimento de dados serial (mais tolerante)
         time_since_data = now - self.last_data_received
-        if time_since_data > timedelta(minutes=10):  # 10 minutos em vez de 5
+        if time_since_data > timedelta(minutes=2):  # 2 minutos para debug
             logger.warning(f"{self.color} ⚠️ Sem dados seriais há {time_since_data}")
+            logger.warning(f"{self.color} 🔍 DIAGNÓSTICO: Verificando porta {self.port}...")
+            
+            # Verifica se porta ainda existe
+            import os
+            if not os.path.exists(self.port):
+                logger.error(f"{self.color} ❌ Porta {self.port} não existe mais!")
+            else:
+                logger.info(f"{self.color} ✅ Porta {self.port} existe")
+                
+            # Verifica se conexão está aberta
+            if self.serial_connection and self.serial_connection.is_open:
+                logger.info(f"{self.color} ✅ Conexão serial aberta")
+                # Verifica se há bytes aguardando
+                try:
+                    in_waiting = self.serial_connection.in_waiting
+                    logger.info(f"{self.color} 📊 Bytes aguardando: {in_waiting}")
+                except Exception as e:
+                    logger.error(f"{self.color} ❌ Erro verificando in_waiting: {e}")
+            else:
+                logger.error(f"{self.color} ❌ Conexão serial fechada")
+                
             if self._should_attempt_recovery():
                 self._attempt_serial_recovery()
         
@@ -729,7 +750,7 @@ class AutoRecoverySingleRadarCounter:
                         time.sleep(5)
                         continue
                 
-                # Leitura mais simples e estável
+                                # Leitura mais simples e estável
                 try:
                     in_waiting = self.serial_connection.in_waiting or 0
                     
@@ -738,6 +759,14 @@ class AutoRecoverySingleRadarCounter:
                     else:
                         # Se não há dados, aguarda um pouco e continua
                         time.sleep(0.1)
+                        
+                        # DEBUG: Mostra periodicamente que está aguardando dados
+                        import time as time_module
+                        if not hasattr(self, '_last_waiting_log'):
+                            self._last_waiting_log = time_module.time()
+                        if time_module.time() - self._last_waiting_log > 30:  # A cada 30s
+                            logger.info(f"🔍 {self.area_tipo}: Aguardando dados na porta {self.port}...")
+                            self._last_waiting_log = time_module.time()
                         continue
                 except serial.SerialTimeoutException:
                     # Timeout é normal
@@ -749,6 +778,11 @@ class AutoRecoverySingleRadarCounter:
                     self.last_data_received = datetime.now()  # Marca recebimento
                     
                     text = data.decode('utf-8', errors='ignore')
+                    
+                    # DEBUG TEMPORÁRIO: Mostra TODOS os dados recebidos
+                    if text.strip():
+                        logger.info(f"🔍 DADOS BRUTOS {self.area_tipo}: {repr(text)}")
+                    
                     buffer += text
                     
                     if '\n' in buffer:
@@ -757,16 +791,23 @@ class AutoRecoverySingleRadarCounter:
                         
                         for line in lines[:-1]:
                             line = line.strip()
-                            if not line or not line.startswith('{'):
-                                continue
+                            logger.info(f"🔍 LINHA {self.area_tipo}: {repr(line)}")
                             
-                            try:
-                                data_json = json.loads(line)
-                                self.process_json_data(data_json)  
-                            except json.JSONDecodeError:
-                                logger.debug(f"JSON inválido: {line[:50]}...")
-                            except Exception as e:
-                                logger.error(f"Erro processando JSON: {e}")
+                            if not line:
+                                continue
+                                
+                            # DEBUG: Tenta processar qualquer linha que pareça JSON
+                            if line.startswith('{') and line.endswith('}'):
+                                try:
+                                    data_json = json.loads(line)
+                                    logger.info(f"✅ JSON VÁLIDO {self.area_tipo}: {data_json}")
+                                    self.process_json_data(data_json)
+                                except json.JSONDecodeError as e:
+                                    logger.error(f"❌ JSON INVÁLIDO {self.area_tipo}: {line[:100]} | Erro: {e}")
+                                except Exception as e:
+                                    logger.error(f"❌ ERRO PROCESSANDO {self.area_tipo}: {e}")
+                            else:
+                                logger.warning(f"⚠️ LINHA NÃO-JSON {self.area_tipo}: {line[:50]}...")
                 
                 time.sleep(0.01)
                 
