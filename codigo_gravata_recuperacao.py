@@ -884,22 +884,33 @@ class AutoRecoverySingleRadarCounter:
             # 🔍 DEBUG: Verifica campos de distância disponíveis
             distance_raw = person.get('distance_raw', None)
             distance_smoothed = person.get('distance_smoothed', None)
-            distance = distance_smoothed if distance_smoothed is not None else distance_raw
             
             # Debug detalhado dos dados recebidos
             logger.info(f"🔍 DEBUG {self.area_tipo} Pessoa {i}: campos recebidos do Arduino:")
             logger.info(f"   distance_raw: {distance_raw}")
             logger.info(f"   distance_smoothed: {distance_smoothed}")
-            logger.info(f"   distance final: {distance}")
             logger.info(f"   x_pos: {x_pos}, y_pos: {y_pos}")
             logger.info(f"   outros campos: {list(person.keys())}")
             
-            # Se não há distância válida, usa distância calculada das coordenadas
-            if distance is None or distance == 0:
-                import math
-                calculated_distance = math.sqrt(x_pos**2 + y_pos**2)
-                distance = calculated_distance
-                logger.warning(f"⚠️ Distância do Arduino inválida, usando calculada: {distance:.2f}m")
+            # SEMPRE CALCULA DISTÂNCIA DAS COORDENADAS (mais confiável)
+            import math
+            calculated_distance = math.sqrt(x_pos**2 + y_pos**2)
+            
+            # Usa distância calculada como padrão, comparando com Arduino
+            distance = calculated_distance
+            
+            # Se Arduino enviou distância, compara
+            arduino_distance = distance_smoothed if distance_smoothed is not None else distance_raw
+            if arduino_distance is not None and arduino_distance > 0:
+                if abs(arduino_distance - calculated_distance) < 0.3:
+                    # Arduino está consistente, pode usar
+                    distance = arduino_distance
+                    logger.info(f"   ✅ Arduino consistente: {arduino_distance:.2f}m (calculada: {calculated_distance:.2f}m)")
+                else:
+                    # Arduino suspeito, usa calculada
+                    logger.warning(f"   ⚠️ Arduino suspeito: {arduino_distance:.2f}m vs calculada: {calculated_distance:.2f}m - USANDO CALCULADA")
+            else:
+                logger.info(f"   🔧 Arduino sem distância, usando calculada: {distance:.2f}m")
             
             # ✅ CALCULA ZONA ESPECÍFICA DA ÁREA usando coordenadas x,y
             zone = self.zone_manager.get_zone(x_pos, y_pos)
@@ -911,7 +922,15 @@ class AutoRecoverySingleRadarCounter:
             # Procura se já existe pessoa similar (mesma zona, distância similar)
             found_existing = None
             for existing_id, existing_person in self.current_people.items():
-                existing_dist = existing_person.get('distance_smoothed', 0)
+                existing_dist = existing_person.get('distance_smoothed')
+                if existing_dist is None:
+                    existing_dist = existing_person.get('distance_raw')
+                if existing_dist is None:
+                    # Calcula das coordenadas se não tem distância
+                    existing_x = existing_person.get('x_pos', 0)
+                    existing_y = existing_person.get('y_pos', 0)
+                    existing_dist = math.sqrt(existing_x**2 + existing_y**2)
+                    
                 existing_zone = existing_person.get('zone', '')
                 
                 if (existing_zone == zone and 
@@ -934,9 +953,22 @@ class AutoRecoverySingleRadarCounter:
                 is_really_new = True
                 for old_id, old_person in self.previous_people.items():
                     old_zone = old_person.get('zone', '')
-                    old_dist = old_person.get('distance_smoothed', 0)
+                    old_dist = old_person.get('distance_smoothed')
+                    if old_dist is None:
+                        old_dist = old_person.get('distance_raw')
+                    if old_dist is None:
+                        old_x = old_person.get('x_pos', 0)
+                        old_y = old_person.get('y_pos', 0)
+                        old_dist = math.sqrt(old_x**2 + old_y**2)
+                        
                     new_zone = person_info.get('zone', '')
-                    new_dist = person_info.get('distance_smoothed', 0)
+                    new_dist = person_info.get('distance_smoothed')
+                    if new_dist is None:
+                        new_dist = person_info.get('distance_raw')
+                    if new_dist is None:
+                        new_x = person_info.get('x_pos', 0)
+                        new_y = person_info.get('y_pos', 0)
+                        new_dist = math.sqrt(new_x**2 + new_y**2)
                     
                     if (old_zone == new_zone and 
                         abs(old_dist - new_dist) < 0.5 and
@@ -1075,9 +1107,16 @@ class AutoRecoverySingleRadarCounter:
 
                     # Encontra ID da nossa lógica interna (igual Santa Cruz)
                     our_person_id = None
-                    distance_to_compare = distance_final if distance_final is not None else 0
+                    distance_to_compare = distance_final if distance_final is not None else calculated_distance
                     for internal_id, internal_person in self.current_people.items():
-                        internal_distance = internal_person.get('distance_smoothed', internal_person.get('distance_raw', 0))
+                        internal_distance = internal_person.get('distance_smoothed')
+                        if internal_distance is None:
+                            internal_distance = internal_person.get('distance_raw')
+                        if internal_distance is None:
+                            # Calcula das coordenadas se não tem distância
+                            internal_x = internal_person.get('x_pos', 0)
+                            internal_y = internal_person.get('y_pos', 0)
+                            internal_distance = math.sqrt(internal_x**2 + internal_y**2)
                         if (abs(internal_distance - distance_to_compare) < 0.1 and
                             internal_person.get('zone', '') == zone):
                             our_person_id = internal_id
@@ -1126,21 +1165,42 @@ class AutoRecoverySingleRadarCounter:
 
                     # ✅ CALCULA DISTÂNCIA MÉDIA CORRIGIDA
                     valid_distances = []
-                    for p in active_people:
+                    for i, p in enumerate(active_people):
                         distance_raw = p.get('distance_raw', None)
                         distance_smoothed = p.get('distance_smoothed', None)
+                        x = p.get('x_pos', 0)
+                        y = p.get('y_pos', 0)
+                        
+                        # 🔍 DEBUG CRÍTICO: Mostra exatamente o que está sendo usado
+                        logger.error(f"🔍 PLANILHA DEBUG {self.area_tipo} Pessoa {i}:")
+                        logger.error(f"   distance_raw do Arduino: {distance_raw}")
+                        logger.error(f"   distance_smoothed do Arduino: {distance_smoothed}")
+                        logger.error(f"   x_pos: {x}, y_pos: {y}")
+                        
+                        # Prioriza distância smoothed, depois raw
                         distance = distance_smoothed if distance_smoothed is not None else distance_raw
                         
-                        # Se não há distância válida, calcula das coordenadas
+                        # Se não há distância válida do Arduino, calcula das coordenadas
                         if distance is None or distance == 0:
                             import math
-                            x = p.get('x_pos', 0)
-                            y = p.get('y_pos', 0)
-                            distance = math.sqrt(x**2 + y**2)
+                            calculated_distance = math.sqrt(x**2 + y**2)
+                            distance = calculated_distance
+                            logger.error(f"   ⚠️ USANDO DISTÂNCIA CALCULADA: {distance:.3f}m")
+                        else:
+                            # Verifica se o Arduino está enviando sempre o mesmo valor
+                            import math
+                            calculated_distance = math.sqrt(x**2 + y**2)
+                            if abs(distance - calculated_distance) > 0.5:
+                                logger.error(f"   ⚠️ DISCREPÂNCIA! Arduino: {distance:.3f}m vs Calculada: {calculated_distance:.3f}m")
+                                logger.error(f"   🔧 PROBLEMA: Arduino pode estar enviando valor padrão fixo!")
+                            else:
+                                logger.error(f"   ✅ ARDUINO OK: {distance:.3f}m (calculada: {calculated_distance:.3f}m)")
                         
+                        logger.error(f"   📊 DISTÂNCIA FINAL PARA PLANILHA: {distance:.3f}m")
                         valid_distances.append(distance)
                     
                     avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0
+                    logger.error(f"🔍 DISTÂNCIA MÉDIA PARA PLANILHA {self.area_tipo}: {avg_distance:.3f}m")
                     
                     # ✅ FORMATO SANTA CRUZ (9 campos) - planilha separada por área
                     row = [
