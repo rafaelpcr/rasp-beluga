@@ -434,11 +434,10 @@ class AutoRecoverySingleRadarCounter:
         self.max_simultaneous_people = 0
         self.session_start_time = datetime.now()
         
-        # Configurações de tracking (mais realistas para pessoas paradas)
-        self.exit_timeout = 30.0          # 30 segundos para considerar que saiu (pessoas podem ficar paradas)
+        # Configurações de tracking
+        self.exit_timeout = 3.0
         self.reentry_timeout = 10.0
         self.last_update_time = time.time()
-        self.person_timeout = 30.0         # Timeout principal para pessoas inativas
         
         # Configurações anti-quota (intervalos maiores para melhor detecção)
         self.last_sheets_write = 0
@@ -796,14 +795,6 @@ class AutoRecoverySingleRadarCounter:
                             except Exception as e:
                                 logger.error(f"Erro processando JSON: {e}")
                 
-                # Limpeza periódica de pessoas inativas
-                current_time = time.time()
-                if not hasattr(self, 'last_cleanup_time'):
-                    self.last_cleanup_time = current_time
-                elif current_time - self.last_cleanup_time > 30.0:  # A cada 30 segundos
-                    self.cleanup_inactive_people()
-                    self.last_cleanup_time = current_time
-                
                 time.sleep(0.01)
                 
             except Exception as e:
@@ -999,7 +990,7 @@ class AutoRecoverySingleRadarCounter:
         for person_id, person_info in self.current_people.items():
             if person_id not in current_people_dict:
                 last_seen = person_info.get('last_seen', 0)
-                if (current_time - last_seen) > self.person_timeout:
+                if (current_time - last_seen) > 1.0:
                     exits.append(person_id)
                     self.exits_count += 1
                     zone = person_info.get('zone', 'DESCONHECIDA')
@@ -1017,21 +1008,6 @@ class AutoRecoverySingleRadarCounter:
             logger.info(f"📊 NOVO MÁXIMO {self.area_tipo}: {self.max_simultaneous_people} pessoas")
         
         self.last_update_time = current_time
-
-    def cleanup_inactive_people(self):
-        """Remove pessoas que não foram vistas há muito tempo"""
-        current_time = time.time()
-        to_remove = []
-        
-        for person_id, person_info in self.current_people.items():
-            last_seen = person_info.get('last_seen', 0)
-            if (current_time - last_seen) > self.person_timeout:
-                to_remove.append(person_id)
-                zone = person_info.get('zone', 'DESCONHECIDA')
-                logger.info(f"🧹 Limpeza {self.area_tipo}: removendo {person_id} de {zone} após {self.person_timeout}s")
-        
-        for person_id in to_remove:
-            del self.current_people[person_id]
 
     def process_json_data(self, data_json):
         """Processa dados JSON IGUAL AO SANTA CRUZ com área específica"""
@@ -1201,22 +1177,26 @@ class AutoRecoverySingleRadarCounter:
                         logger.error(f"   distance_smoothed do Arduino: {distance_smoothed}")
                         logger.error(f"   x_pos: {x}, y_pos: {y}")
                         
-                        # ✅ SEMPRE USA DISTÂNCIA CALCULADA (mais confiável)
-                        import math
-                        calculated_distance = math.sqrt(x**2 + y**2)
-                        distance = calculated_distance  # FORÇA uso da calculada
+                        # Prioriza distância smoothed, depois raw
+                        distance = distance_smoothed if distance_smoothed is not None else distance_raw
                         
-                        # Log do Arduino só para debug
-                        arduino_distance = distance_smoothed if distance_smoothed is not None else distance_raw
-                        if arduino_distance is not None and arduino_distance > 0:
-                            if abs(arduino_distance - calculated_distance) > 0.3:
-                                logger.error(f"   ⚠️ Arduino suspeito: {arduino_distance:.3f}m vs Real: {calculated_distance:.3f}m")
-                            else:
-                                logger.error(f"   ✅ Arduino consistente: {arduino_distance:.3f}m (usando real: {calculated_distance:.3f}m)")
+                        # Se não há distância válida do Arduino, calcula das coordenadas
+                        if distance is None or distance == 0:
+                            import math
+                            calculated_distance = math.sqrt(x**2 + y**2)
+                            distance = calculated_distance
+                            logger.error(f"   ⚠️ USANDO DISTÂNCIA CALCULADA: {distance:.3f}m")
                         else:
-                            logger.error(f"   🔧 Arduino sem distância, usando calculada: {distance:.3f}m")
+                            # Verifica se o Arduino está enviando sempre o mesmo valor
+                            import math
+                            calculated_distance = math.sqrt(x**2 + y**2)
+                            if abs(distance - calculated_distance) > 0.5:
+                                logger.error(f"   ⚠️ DISCREPÂNCIA! Arduino: {distance:.3f}m vs Calculada: {calculated_distance:.3f}m")
+                                logger.error(f"   🔧 PROBLEMA: Arduino pode estar enviando valor padrão fixo!")
+                            else:
+                                logger.error(f"   ✅ ARDUINO OK: {distance:.3f}m (calculada: {calculated_distance:.3f}m)")
                         
-                        logger.error(f"   📊 DISTÂNCIA REAL PARA PLANILHA: {distance:.3f}m")
+                        logger.error(f"   📊 DISTÂNCIA FINAL PARA PLANILHA: {distance:.3f}m")
                         valid_distances.append(distance)
                     
                     avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0
