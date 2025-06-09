@@ -109,31 +109,58 @@ class SimpleGoogleSheetsManager:
         return False
 
 class SimpleZoneManager:
-    """Sistema de zonas simplificado para Gravata - DUAS ÁREAS DISTINTAS"""
+    """Sistema de zonas dinâmico - Externa (2 zonas) vs Interna (5 zonas do Santa Cruz)"""
     
-    def __init__(self):
-        # ✅ GRAVATA REAL: Zonas corretas baseadas na distância
-        self.ZONES = {
-            'AREA_PASSAGEM': (0.0, 2.0),       # 0-2m - Passagem (área externa próxima)
-            'AREA_INTERESSE': (2.0, 5.0),      # 2-5m - Interesse (área externa distante)
-            'AREA_INTERNA': (5.0, 10.0)        # 5-10m - Ativações culturais (área interna)
+    def __init__(self, area_tipo='AREA_EXTERNA'):
+        self.area_tipo = area_tipo
+        
+        # ✅ ÁREA EXTERNA: Apenas 2 zonas (passagem e interesse)
+        self.ZONES_EXTERNA = {
+            'AREA_PASSAGEM': (0.0, 2.0),       # 0-2m - Passagem
+            'AREA_INTERESSE': (2.0, 5.0),      # 2-5m - Interesse
         }
+        
+        # ✅ ÁREA INTERNA: 5 zonas igual Santa Cruz
+        self.ZONES_INTERNA = {
+            'MUITO_PERTO': (0.0, 1.0),         # 0-1m - Sala de Reboco
+            'PERTO': (1.0, 2.5),               # 1-2.5m - Ativações próximas
+            'MEDIO': (2.5, 4.0),               # 2.5-4m - Ativações médias  
+            'LONGE': (4.0, 6.0),               # 4-6m - Entrada
+            'MUITO_LONGE': (6.0, 10.0)         # 6-10m - Área geral
+        }
+        
+        # Define qual conjunto de zonas usar
+        if area_tipo == 'AREA_INTERNA':
+            self.ZONES = self.ZONES_INTERNA
+        else:
+            self.ZONES = self.ZONES_EXTERNA
     
     def get_zone(self, distance):
-        """Determina zona pela distância (Gravata com zonas corretas)"""
+        """Determina zona pela distância (dinâmico conforme área)"""
         for zone_name, (min_dist, max_dist) in self.ZONES.items():
             if min_dist <= distance < max_dist:
                 return zone_name
         return 'FORA_ALCANCE'
     
     def get_zone_description(self, zone_name):
-        """Descrição das zonas do Gravata"""
-        descriptions = {
-            'AREA_PASSAGEM': 'Área de Passagem (< 2m)',
-            'AREA_INTERESSE': 'Área de Interesse (2-5m)', 
-            'AREA_INTERNA': 'Área Interna - Ativações (5-10m)',
-            'FORA_ALCANCE': 'Fora de Alcance'
-        }
+        """Descrição das zonas (dinâmico conforme área)"""
+        if self.area_tipo == 'AREA_INTERNA':
+            # Descrições da área interna (Santa Cruz)
+            descriptions = {
+                'MUITO_PERTO': 'Sala Reboco (0-1m)',
+                'PERTO': 'Ativações Próximas (1-2.5m)', 
+                'MEDIO': 'Ativações Médias (2.5-4m)',
+                'LONGE': 'Entrada (4-6m)',
+                'MUITO_LONGE': 'Área Geral (6-10m)',
+                'FORA_ALCANCE': 'Fora de Alcance'
+            }
+        else:
+            # Descrições da área externa (Gravata)
+            descriptions = {
+                'AREA_PASSAGEM': 'Área de Passagem (< 2m)',
+                'AREA_INTERESSE': 'Área de Interesse (2-5m)', 
+                'FORA_ALCANCE': 'Fora de Alcance'
+            }
         return descriptions.get(zone_name, zone_name)
 
 class SimpleRadarCounter:
@@ -151,7 +178,7 @@ class SimpleRadarCounter:
         self.is_running = False
         self.receive_thread = None
         self.gsheets_manager = None
-        self.zone_manager = SimpleZoneManager()
+        self.zone_manager = SimpleZoneManager(config['area_tipo'])
         
         # Contadores eficazes
         self.current_people = {}
@@ -378,8 +405,18 @@ class SimpleRadarCounter:
                     print(f"   • 🚶 {passagem} pessoa(s) em passagem (< 2m)")
                     print(f"   • 👀 {interesse} pessoa(s) com interesse (2-5m)")
                 elif self.area_tipo == 'AREA_INTERNA':
-                    ativacoes = sum(1 for d in distances if d >= 5.0)
-                    print(f"   • 🎨 {ativacoes} pessoa(s) nas ativações culturais (5-10m)")
+                    # Análise igual Santa Cruz (5 zonas)
+                    muito_perto = sum(1 for d in distances if 0.0 <= d < 1.0)
+                    perto = sum(1 for d in distances if 1.0 <= d < 2.5)
+                    medio = sum(1 for d in distances if 2.5 <= d < 4.0)
+                    longe = sum(1 for d in distances if 4.0 <= d < 6.0)
+                    muito_longe = sum(1 for d in distances if 6.0 <= d < 10.0)
+                    
+                    if muito_perto > 0: print(f"   • 🏠 {muito_perto} pessoa(s) na Sala Reboco (0-1m)")
+                    if perto > 0: print(f"   • 🎨 {perto} pessoa(s) em Ativações Próximas (1-2.5m)")
+                    if medio > 0: print(f"   • 📍 {medio} pessoa(s) em Ativações Médias (2.5-4m)")
+                    if longe > 0: print(f"   • 🚪 {longe} pessoa(s) na Entrada (4-6m)")
+                    if muito_longe > 0: print(f"   • 🌐 {muito_longe} pessoa(s) na Área Geral (6-10m)")
                 
             else:
                 area_desc = "área externa" if self.area_tipo == 'AREA_EXTERNA' else "área interna"
@@ -598,7 +635,9 @@ def main():
         logger.info("   ✅ Display limpo e informativo")
         logger.info("🏢 CONFIGURAÇÃO DUAL GRAVATA:")
         logger.info("   • Radar Externa: Passagem (0-2m) + Interesse (2-5m)")
-        logger.info("   • Radar Interna: Ativações (5-10m)")
+        logger.info("   • Radar Interna: 5 zonas iguais ao Santa Cruz")
+        logger.info("     - Sala Reboco (0-1m), Ativações Próx (1-2.5m)")
+        logger.info("     - Ativações Méd (2.5-4m), Entrada (4-6m), Geral (6-10m)")
         logger.info("   • Planilha unificada com zona específica")
         logger.info("   • Monitoramento simultâneo")
         logger.info("=" * 60)
