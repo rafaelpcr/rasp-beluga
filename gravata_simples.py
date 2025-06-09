@@ -112,14 +112,15 @@ class SimpleZoneManager:
     """Sistema de zonas simplificado para Gravata - DUAS ÁREAS DISTINTAS"""
     
     def __init__(self):
-        # ✅ GRAVATA REAL: Duas áreas principais
+        # ✅ GRAVATA REAL: Zonas corretas baseadas na distância
         self.ZONES = {
-            'AREA_EXTERNA': (0.0, 5.0),        # 0-5m - Passagem e interesse (entrada/circulação)
-            'AREA_INTERNA': (5.0, 10.0)        # 5-10m - Ativações culturais (igual Santa Cruz)
+            'AREA_PASSAGEM': (0.0, 2.0),       # 0-2m - Passagem (área externa próxima)
+            'AREA_INTERESSE': (2.0, 5.0),      # 2-5m - Interesse (área externa distante)
+            'AREA_INTERNA': (5.0, 10.0)        # 5-10m - Ativações culturais (área interna)
         }
     
     def get_zone(self, distance):
-        """Determina zona pela distância (Gravata com duas áreas)"""
+        """Determina zona pela distância (Gravata com zonas corretas)"""
         for zone_name, (min_dist, max_dist) in self.ZONES.items():
             if min_dist <= distance < max_dist:
                 return zone_name
@@ -128,8 +129,9 @@ class SimpleZoneManager:
     def get_zone_description(self, zone_name):
         """Descrição das zonas do Gravata"""
         descriptions = {
-            'AREA_EXTERNA': 'Área Externa (Passagem/Interesse)',
-            'AREA_INTERNA': 'Área Interna (Ativações)', 
+            'AREA_PASSAGEM': 'Área de Passagem (< 2m)',
+            'AREA_INTERESSE': 'Área de Interesse (2-5m)', 
+            'AREA_INTERNA': 'Área Interna - Ativações (5-10m)',
             'FORA_ALCANCE': 'Fora de Alcance'
         }
         return descriptions.get(zone_name, zone_name)
@@ -371,11 +373,13 @@ class SimpleRadarCounter:
                 
                 # Análise específica por área
                 if self.area_tipo == 'AREA_EXTERNA':
-                    passagem_interesse = sum(1 for d in distances if d <= 5.0)
-                    print(f"   • 🚶 {passagem_interesse} pessoa(s) em passagem/interesse")
+                    passagem = sum(1 for d in distances if d < 2.0)
+                    interesse = sum(1 for d in distances if 2.0 <= d < 5.0)
+                    print(f"   • 🚶 {passagem} pessoa(s) em passagem (< 2m)")
+                    print(f"   • 👀 {interesse} pessoa(s) com interesse (2-5m)")
                 elif self.area_tipo == 'AREA_INTERNA':
                     ativacoes = sum(1 for d in distances if d >= 5.0)
-                    print(f"   • 🎨 {ativacoes} pessoa(s) nas ativações culturais")
+                    print(f"   • 🎨 {ativacoes} pessoa(s) nas ativações culturais (5-10m)")
                 
             else:
                 area_desc = "área externa" if self.area_tipo == 'AREA_EXTERNA' else "área interna"
@@ -593,9 +597,9 @@ def main():
         logger.info("   ✅ Auto-detecção de porta serial")
         logger.info("   ✅ Display limpo e informativo")
         logger.info("🏢 CONFIGURAÇÃO DUAL GRAVATA:")
-        logger.info("   • Radar Externa: Passagem/Interesse (0-5m)")
+        logger.info("   • Radar Externa: Passagem (0-2m) + Interesse (2-5m)")
         logger.info("   • Radar Interna: Ativações (5-10m)")
-        logger.info("   • Planilha unificada com area_tipo")
+        logger.info("   • Planilha unificada com zona específica")
         logger.info("   • Monitoramento simultâneo")
         logger.info("=" * 60)
         
