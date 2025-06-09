@@ -39,7 +39,7 @@ RADAR_CONFIGS = {
         'name': 'Gravata Área Externa',
         'port': '/dev/ttyUSB0',  # Radar da área externa (Raspberry Pi)
         'baudrate': 115200,
-        'spreadsheet_id': '17KKL1rm1pCJ1Q57FAzyZKqR0IQyPqdiqCjO1mf1QKGQ',  # ID correto da planilha externa
+        'spreadsheet_id': '17KkL1rm1pCJ1Q57FAzyZKqR0lQyPqdiqCjO1mf1QKGQ',  # ID CORRIGIDO da planilha externa
         'color': '🔵',
         'area_tipo': 'AREA_EXTERNA',
         'description': 'Passagem e Interesse'
@@ -49,7 +49,7 @@ RADAR_CONFIGS = {
         'name': 'Gravata Área Interna',
         'port': '/dev/ttyUSB1',  # Radar da área interna (Raspberry Pi - porta diferente)
         'baudrate': 115200,
-        'spreadsheet_id': '1ACu8Qmicxw7Av-1nAK_dIDbcD_RJBizk2iXspixK2Qg',  # ID correto da planilha interna
+        'spreadsheet_id': '1ACu8Qmicxv7Av-1nAK_dIDbcD_RJBizk2iXspixK2Gg',  # ID CORRIGIDO da planilha interna
         'color': '🟣',
         'area_tipo': 'AREA_INTERNA', 
         'description': 'Ativações Culturais'
