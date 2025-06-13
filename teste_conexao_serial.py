@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 RESET RADAR GRAVATA v1.0
-Sistema isolado para reinicialização de conexão serial dos radares
+Sistema para reset automático da ESP32 ao iniciar
 Usa esptool.py para reset hardware da ESP32
 """
 
@@ -29,12 +29,6 @@ class RadarReset:
         self.port = port
         self.baudrate = baudrate
         self.serial_connection = None
-        self.last_data_time = time.time()
-        self.data_timeout = 60.0  # 60 segundos (1 minuto) sem dados = reiniciar
-        self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 3
-        self.reconnect_delay = 5.0  # 5 segundos entre tentativas
-        self.is_running = False
         self.use_esptool = True  # Usar esptool.py para reset hardware
 
     def reset_esp32_via_esptool(self):
@@ -123,129 +117,58 @@ class RadarReset:
             
         return False
 
-    def reset_connection(self):
-        """Reinicia a conexão serial completamente"""
-        logger.warning(f"🔄 Tentando reiniciar conexão serial...")
-        
+    def reset_and_connect(self):
+        """Realiza o reset e conecta ao radar"""
         try:
-            # Fecha conexão atual se existir
-            if self.serial_connection and self.serial_connection.is_open:
-                self.serial_connection.close()
-                time.sleep(1)
-            
             # Tenta reset hardware se esptool estiver habilitado
             if self.use_esptool:
                 if self.reset_esp32_via_esptool():
                     logger.info("⏳ Aguardando 5 segundos para ESP32 reiniciar...")
                     time.sleep(5)  # Aguarda reinicialização completa
                 else:
-                    logger.warning("⚠️ Reset hardware falhou, tentando reconexão normal...")
+                    logger.warning("⚠️ Reset hardware falhou, tentando conexão normal...")
             
-            # Tenta reconectar
+            # Tenta conectar
             if self.connect():
-                self.reconnect_attempts = 0
-                logger.info(f"✅ Conexão serial reiniciada com sucesso!")
+                logger.info(f"✅ Conexão estabelecida com sucesso!")
                 return True
             else:
-                self.reconnect_attempts += 1
-                logger.error(f"❌ Falha ao reiniciar conexão (tentativa {self.reconnect_attempts}/{self.max_reconnect_attempts})")
+                logger.error("❌ Falha ao estabelecer conexão")
                 return False
                 
         except Exception as e:
-            logger.error(f"❌ Erro ao reiniciar conexão: {e}")
+            logger.error(f"❌ Erro durante reset e conexão: {e}")
             return False
 
-    def monitor_connection(self):
-        """Monitora a conexão e reinicia se necessário"""
-        self.is_running = True
-        buffer = ""
-        
-        while self.is_running:
-            try:
-                if not self.serial_connection or not self.serial_connection.is_open:
-                    logger.warning("⚠️ Conexão perdida, tentando reconectar...")
-                    if self.connect():
-                        buffer = ""
-                        continue
-                    else:
-                        time.sleep(5)
-                        continue
-
-                # Lê dados disponíveis
-                if self.serial_connection.in_waiting > 0:
-                    data = self.serial_connection.read(self.serial_connection.in_waiting)
-                    text = data.decode('utf-8', errors='ignore')
-                    buffer += text
-                    
-                    # Atualiza timestamp do último dado recebido
-                    self.last_data_time = time.time()
-                    
-                    # Processa linhas completas
-                    if '\n' in buffer:
-                        lines = buffer.split('\n')
-                        buffer = lines[-1]
-                        
-                        for line in lines[:-1]:
-                            line = line.strip()
-                            if line:
-                                logger.info(f"📡 Dados recebidos: {line[:50]}...")
-
-                # Verifica timeout de dados
-                current_time = time.time()
-                if (current_time - self.last_data_time) > self.data_timeout:
-                    logger.warning(f"⚠️ Timeout de dados detectado ({self.data_timeout}s sem receber dados)")
-                    
-                    if self.reconnect_attempts < self.max_reconnect_attempts:
-                        if self.reset_connection():
-                            self.last_data_time = current_time
-                            continue
-                        else:
-                            time.sleep(self.reconnect_delay)
-                    else:
-                        logger.error("❌ Máximo de tentativas de reconexão atingido!")
-                        self.is_running = False
-                        break
-
-                time.sleep(0.1)
-
-            except Exception as e:
-                logger.error(f"❌ Erro no monitoramento: {e}")
-                time.sleep(2)
-
-    def stop(self):
-        """Para o monitoramento"""
-        self.is_running = False
+    def close(self):
+        """Fecha a conexão serial"""
         if self.serial_connection and self.serial_connection.is_open:
             self.serial_connection.close()
-        logger.info("🛑 Monitoramento encerrado!")
+            logger.info("🔌 Conexão serial fechada")
 
 def main():
-    """Função principal para testar o reset do radar"""
+    """Função principal para reset do radar"""
     logger.info("🚀 Iniciando Sistema de Reset do Radar...")
     
     # Cria instância do reset
     radar = RadarReset()
     
     try:
-        # Tenta conectar
-        if not radar.connect():
-            logger.error("❌ Não foi possível conectar ao radar")
-            return
-        
         logger.info("=" * 60)
         logger.info("🔵 SISTEMA DE RESET DO RADAR v1.0")
         logger.info("=" * 60)
         logger.info("🎯 CARACTERÍSTICAS:")
-        logger.info("   ✅ Monitoramento contínuo da conexão")
+        logger.info("   ✅ Reset automático ao iniciar")
         logger.info("   ✅ Reset hardware via esptool.py")
-        logger.info("   ✅ Reinicialização automática em caso de timeout")
-        logger.info("   ✅ Máximo de 3 tentativas de reconexão")
-        logger.info("   ✅ Timeout de 60 segundos sem dados")
-        logger.info("   ✅ Delay de 5 segundos entre tentativas")
+        logger.info("   ✅ Auto-detecção de porta serial")
+        logger.info("   ✅ Instalação automática do esptool.py")
         logger.info("=" * 60)
         
-        # Inicia monitoramento
-        radar.monitor_connection()
+        # Realiza reset e conexão
+        if radar.reset_and_connect():
+            logger.info("✅ Radar resetado e conectado com sucesso!")
+        else:
+            logger.error("❌ Falha ao resetar e conectar ao radar")
         
     except KeyboardInterrupt:
         logger.info("🛑 Encerrando por solicitação do usuário...")
@@ -254,7 +177,7 @@ def main():
         logger.error(f"❌ Erro inesperado: {e}")
     
     finally:
-        radar.stop()
+        radar.close()
         logger.info("✅ Sistema encerrado!")
 
 if __name__ == "__main__":
