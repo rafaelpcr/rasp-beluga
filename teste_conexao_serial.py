@@ -29,47 +29,28 @@ class RadarReset:
         self.port = port
         self.baudrate = baudrate
         self.serial_connection = None
-        self.use_esptool = True  # Usar esptool.py para reset hardware
+        self.use_direct_reset = True  # Usar reset direto via DTR/RTS
 
-    def reset_esp32_via_esptool(self):
-        """Reseta a ESP32 usando esptool.py (reset hardware)"""
-        logger.info(f"🔄 Tentando reset hardware da ESP32 na porta {self.port} via esptool.py...")
+    def direct_reset_esp32(self):
+        """Reseta a ESP32 diretamente via DTR/RTS"""
+        logger.info(f"🔄 Tentando resetar ESP32 na porta {self.port} diretamente (DTR/RTS)...")
         try:
-            # Comando para resetar a ESP32
-            command = ['esptool.py', '--port', self.port, '--before', 'default_reset', 'run']
-            
-            # Executa o comando e captura a saída
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            
-            logger.info("📝 Saída do esptool.py:")
-            logger.info(result.stdout)
-            if result.stderr:
-                logger.warning("⚠️ Erros do esptool.py:")
-                logger.warning(result.stderr)
-            
-            logger.info(f"✅ Reset hardware da ESP32 na porta {self.port} realizado com sucesso!")
+            ser = serial.Serial(self.port, self.baudrate, timeout=1)
+            ser.dtr = 0
+            ser.rts = 0
+            time.sleep(0.1)
+            ser.dtr = 1
+            ser.rts = 1
+            time.sleep(0.1)
+            ser.close()
+            logger.info(f"✅ Reset da ESP32 na porta {self.port} solicitado com sucesso (direto).")
             return True
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"❌ Erro ao chamar esptool.py: {e}")
-            logger.error(f"📝 Stdout: {e.stdout}")
-            logger.error(f"❌ Stderr: {e.stderr}")
+        except serial.SerialException as e:
+            logger.error(f"Erro na porta serial: {e}")
+            logger.error("Verifique se a porta está correta, se o dispositivo está conectado e as permissões.")
             return False
-            
-        except FileNotFoundError:
-            logger.error("❌ Erro: 'esptool.py' não encontrado. Instalando...")
-            try:
-                # Tenta instalar o esptool.py
-                subprocess.run(['pip', 'install', 'esptool'], check=True)
-                logger.info("✅ esptool.py instalado com sucesso!")
-                # Tenta novamente após instalação
-                return self.reset_esp32_via_esptool()
-            except Exception as install_error:
-                logger.error(f"❌ Falha ao instalar esptool.py: {install_error}")
-                return False
-                
         except Exception as e:
-            logger.error(f"❌ Erro inesperado no reset hardware: {e}")
+            logger.error(f"Ocorreu um erro inesperado: {e}")
             return False
 
     def find_serial_port(self):
@@ -127,13 +108,13 @@ class RadarReset:
                     logger.error("❌ Nenhuma porta serial encontrada para reset!")
                     return False
 
-            # Tenta reset hardware se esptool estiver habilitado
-            if self.use_esptool:
-                if self.reset_esp32_via_esptool():
+            # Tenta reset direto se habilitado
+            if self.use_direct_reset:
+                if self.direct_reset_esp32():
                     logger.info("⏳ Aguardando 5 segundos para ESP32 reiniciar...")
                     time.sleep(5)  # Aguarda reinicialização completa
                 else:
-                    logger.warning("⚠️ Reset hardware falhou, tentando conexão normal...")
+                    logger.warning("⚠️ Reset direto falhou, tentando conexão normal...")
             
             # Tenta conectar
             if self.connect():
@@ -166,9 +147,8 @@ def main():
         logger.info("=" * 60)
         logger.info("🎯 CARACTERÍSTICAS:")
         logger.info("   ✅ Reset automático ao iniciar")
-        logger.info("   ✅ Reset hardware via esptool.py")
+        logger.info("   ✅ Reset direto via DTR/RTS (sem esptool.py)")
         logger.info("   ✅ Auto-detecção de porta serial")
-        logger.info("   ✅ Instalação automática do esptool.py")
         logger.info("=" * 60)
         
         # Realiza reset e conexão
