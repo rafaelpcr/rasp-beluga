@@ -120,6 +120,13 @@ class RadarReset:
     def reset_and_connect(self):
         """Realiza o reset e conecta ao radar"""
         try:
+            # Garante que a porta está definida
+            if not self.port:
+                self.port = self.find_serial_port()
+                if not self.port:
+                    logger.error("❌ Nenhuma porta serial encontrada para reset!")
+                    return False
+
             # Tenta reset hardware se esptool estiver habilitado
             if self.use_esptool:
                 if self.reset_esp32_via_esptool():
