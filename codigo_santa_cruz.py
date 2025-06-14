@@ -1,300 +1,235 @@
+#!/usr/bin/env python3
+"""
+CONTADOR SANTA CRUZ SIMPLIFICADO v1.0
+Sistema mais eficaz usando valores diretos do Arduino
+Foco na detecção precisa sem complexidade excessiva
+"""
+
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import logging
 import os
-import traceback
 import time
 import json
 import serial
 import threading
 import serial.tools.list_ports
+import gc
 from dotenv import load_dotenv
+import subprocess
 
-# Configuração básica de logging
+# Configuração de logging simples
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('single_radar_counter.log'),
+        logging.FileHandler('santa_cruz_simples.log'),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger('single_radar_counter')
-
-# Configurando o nível de log para outros módulos
-logging.getLogger('urllib3').setLevel(logging.WARNING)
-logging.getLogger('gspread').setLevel(logging.WARNING)
+logger = logging.getLogger('santa_cruz_simples')
 
 load_dotenv()
 
-# Configuração do radar multi-pessoa v4.2
+# Configuração do radar
 RADAR_CONFIG = {
     'id': 'RADAR_1',
-    'name': 'Contador de Pessoas',
-    'port': '/dev/ttyACM0',  # ✅ Porta padrão Linux para Arduino minimal
+    'name': 'Contador Simplificado',
+    'port': '/dev/ttyACM0',
     'baudrate': 115200,
-    'spreadsheet_id': '1zVVyL6D9XSrzFvtDxaGJ-3CdniD-gG3Q-bUUXyqr3D4',  # Sua planilha
-    'color': '🔴',
-    'description': 'Contador v4.3: Arduino minimal + tracking Python robusto'
+    'spreadsheet_id': '1zVVyL6D9XSrzFvtDxaGJ-3CdniD-gG3Q-bUUXyqr3D4',
+    'color': '🟢',
+    'description': 'Contador v1.0: Simples e Eficaz'
 }
 
-class GoogleSheetsManager:
+# --- FUNÇÃO PARA RESET DA ESP32 ---
+def reset_esp32_via_esptool(serial_port):
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Tentando resetar ESP32 na porta {serial_port} via esptool.py...")
+    try:
+        command = ['esptool.py', '--port', serial_port, '--before', 'default_reset', 'run']
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Saída do esptool.py:")
+        print(result.stdout)
+        if result.stderr:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Erros do esptool.py:")
+            print(result.stderr)
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Reset da ESP32 na porta {serial_port} solicitado com sucesso.")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] ERRO ao chamar esptool.py: {e}")
+        print(f"Stdout: {e.stdout}")
+        print(f"Stderr: {e.stderr}")
+        return False
+    except FileNotFoundError:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] ERRO: 'esptool.py' não encontrado. Certifique-se de que está no PATH ou o instalou corretamente.")
+        return False
+    except Exception as e:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] ERRO inesperado ao resetar ESP32: {e}")
+        return False
+
+# --- Porta da ESP32 pode vir do .env ou ser fixa ---
+ESP32_SERIAL_PORT = os.getenv("ESP32_SERIAL_PORT", "/dev/ttyACM0")
+
+class SimpleGoogleSheetsManager:
+    """Google Sheets Manager Simplificado"""
+    
     def __init__(self, creds_path, spreadsheet_id, radar_id):
         SCOPES = [
             'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive',
-            'https://www.googleapis.com/auth/drive.file'
+            'https://www.googleapis.com/auth/drive'
         ]
         self.radar_id = radar_id
         self.spreadsheet_id = spreadsheet_id
+        self.last_successful_write = datetime.now()
+        
+        # Conecta
         self.creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
         self.gc = gspread.authorize(self.creds)
-        
-        try:
-            self.spreadsheet = self.gc.open_by_key(spreadsheet_id)
-            logger.info(f"✅ Planilha conectada: {self.spreadsheet.title}")
-        except Exception as e:
-            logger.error(f"❌ Erro ao conectar à planilha: {e}")
-            raise
-            
-        try:
-            self.worksheet = self.spreadsheet.get_worksheet(0)
-            logger.info(f"✅ Worksheet selecionada: {self.worksheet.title}")
-        except Exception as e:
-            logger.error(f"❌ Erro ao selecionar worksheet: {e}")
-            raise
+        self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
+        self.worksheet = self.spreadsheet.get_worksheet(0)
         
         self._setup_headers()
 
     def _setup_headers(self):
-        """Configura cabeçalhos da planilha simplificada (campos essenciais)"""
+        """Configura cabeçalhos simplificados"""
         try:
             headers = self.worksheet.row_values(1)
-            # Apenas campos ESSENCIAIS para contagem de pessoas
             expected_headers = [
-                'radar_id',           # ID do radar
-                'timestamp',          # Data/hora
-                'person_count',       # Pessoas simultâneas 
-                'person_id',          # ID da pessoa
-                'zone',               # Zona (PROXIMA/MEDIA/DISTANTE)
-                'distance',           # Distância (metros)
-                'confidence',         # Confiança da detecção (%)
-                'total_detected',     # Total acumulativo
-                'max_simultaneous'    # Máximo simultâneo
+                'radar_id', 'timestamp', 'person_count', 'distances', 
+                'zones', 'avg_confidence', 'total_detected'
             ]
             
-            if not headers or len(headers) < 9:
-                logger.info("🔧 Configurando cabeçalhos simplificados (9 campos essenciais)")
+            if not headers or len(headers) < 7:
+                logger.info("🔧 Configurando cabeçalhos...")
                 self.worksheet.clear()
                 self.worksheet.append_row(expected_headers)
-            else:
-                logger.info("✅ Cabeçalhos simplificados verificados")
-                    
         except Exception as e:
-            logger.warning(f"⚠️ Erro ao configurar cabeçalhos: {e}")
+            logger.warning(f"⚠️ Erro configurando cabeçalhos: {e}")
 
-class ZoneManager:
-    def __init__(self):
-        # Configuração baseada no layout real do estande
-        # Radar instalado no FUNDO do estande
-        
-        # Limites das ativações (baseado no diagrama) - AJUSTADOS para melhor detecção
-        self.ZONA_CONFIGS = {
-            # LADO ESQUERDO (X < -0.5)
-            'SALA_REBOCO': {
-                'x_min': -3.5, 'x_max': -0.3,
-                'y_min': 0.3, 'y_max': 3.8,
-                'distance_range': (1.0, 4.0)
-            },
-            'IGREJINHA': {
-                'x_min': -3.0, 'x_max': -0.2,
-                'y_min': 2.8, 'y_max': 6.0,
-                'distance_range': (2.5, 6.0)
-            },
-            
-            # CENTRO (X entre -0.8 e 0.8)
-            'CENTRO': {
-                'x_min': -1.0, 'x_max': 1.0,
-                'y_min': 1.0, 'y_max': 4.5,
-                'distance_range': (2.0, 5.0)
-            },
-            
-            # LADO DIREITO (X > 0.5)
-            'ARGOLA': {
-                'x_min': 0.3, 'x_max': 3.0,
-                'y_min': 4.0, 'y_max': 7.5,
-                'distance_range': (4.0, 8.0)
-            },
-            'BEIJO': {
-                'x_min': 0.5, 'x_max': 3.5,
-                'y_min': 2.0, 'y_max': 5.5,
-                'distance_range': (3.5, 7.5)
-            },
-            'PESCARIA': {
-                'x_min': 0.8, 'x_max': 4.0,
-                'y_min': 0.2, 'y_max': 4.0,
-                'distance_range': (4.0, 9.0)
-            }
-        }
-        
-    def get_zone(self, x, y):
-        """Determinar zona baseada APENAS nas ativações específicas"""
-        distance = self.get_distance(x, y)
-        
-        # Verifica cada ativação baseada na posição X,Y e distância
-        for zona_name, config in self.ZONA_CONFIGS.items():
-            if (config['x_min'] <= x <= config['x_max'] and
-                config['y_min'] <= y <= config['y_max'] and
-                config['distance_range'][0] <= distance <= config['distance_range'][1]):
-                return zona_name
-        
-        # ✅ Se não está em nenhuma ativação específica, retorna FORA_ATIVACOES
-        return 'FORA_ATIVACOES'
+    def append_row(self, row):
+        """Envia linha com retry simples"""
+        for attempt in range(2):
+            try:
+                self.worksheet.append_row(row)
+                self.last_successful_write = datetime.now()
+                return True
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning(f"⚠️ Erro envio, tentando novamente: {e}")
+                    time.sleep(2)
+                else:
+                    logger.error(f"❌ Falha no envio: {e}")
+                    return False
+        return False
+
+class SimpleZoneManager:
+    """Sistema de zonas simplificado baseado apenas em distância"""
     
-    def get_distance(self, x, y):
-        """Calcular distância do radar"""
-        import math
-        return math.sqrt(x**2 + y**2)
+    def __init__(self):
+        self.ZONES = {
+            'MUITO_PERTO': (0.0, 1.0),      # 0-1m - Sala de Reboco
+            'PERTO': (1.0, 2.5),            # 1-2.5m - Ativações próximas
+            'MEDIO': (2.5, 4.0),            # 2.5-4m - Ativações médias  
+            'LONGE': (4.0, 6.0),            # 4-6m - Entrada
+            'MUITO_LONGE': (6.0, 10.0)      # 6-10m - Área geral
+        }
+    
+    def get_zone(self, distance):
+        """Determina zona pela distância (mais simples e eficaz)"""
+        for zone_name, (min_dist, max_dist) in self.ZONES.items():
+            if min_dist <= distance < max_dist:
+                return zone_name
+        return 'FORA_ALCANCE'
     
     def get_zone_description(self, zone_name):
-        """Retorna descrição amigável da zona (APENAS ativações específicas)"""
+        """Descrição das zonas"""
         descriptions = {
-            'SALA_REBOCO': 'Sala de Reboco',
-            'IGREJINHA': 'Igrejinha', 
-            'CENTRO': 'Centro',
-            'ARGOLA': 'Jogo da Argola',
-            'BEIJO': 'Barraca do Beijo',
-            'PESCARIA': 'Pescaria',
-            'FORA_ATIVACOES': 'Fora das Ativações'
+            'MUITO_PERTO': 'Sala Reboco',
+            'PERTO': 'Ativações Próximas', 
+            'MEDIO': 'Ativações Médias',
+            'LONGE': 'Entrada',
+            'MUITO_LONGE': 'Área Geral',
+            'FORA_ALCANCE': 'Fora de Alcance'
         }
         return descriptions.get(zone_name, zone_name)
 
-class SingleRadarCounter:
+class SimpleRadarCounter:
+    """Contador Simplificado e Eficaz"""
+    
     def __init__(self, config):
         self.config = config
         self.radar_id = config['id']
-        self.radar_name = config['name']
         self.port = config['port']
         self.baudrate = config['baudrate']
         self.color = config['color']
-        self.description = config['description']
         
+        # Estado simplificado
         self.serial_connection = None
         self.is_running = False
         self.receive_thread = None
         self.gsheets_manager = None
-        self.zone_manager = ZoneManager()
+        self.zone_manager = SimpleZoneManager()
         
-        # Sistema robusto de contagem de pessoas
-        self.current_people = {}                # Pessoas atualmente na área {id: info}
-        self.previous_people = {}               # Pessoas na iteração anterior
-        self.people_history = {}                # Histórico completo {id: first_seen_time}
-        self.total_people_detected = 0          # Total acumulativo REAL
-        self.max_simultaneous_people = 0        # Máximo de pessoas simultâneas
+        # Contadores eficazes
+        self.current_people = {}
+        self.total_people_detected = 0
+        self.max_simultaneous_people = 0
         self.session_start_time = datetime.now()
         
-        # Configurações de tracking
-        self.exit_timeout = 3.0                 # Segundos para considerar que pessoa saiu
-        self.reentry_timeout = 10.0             # Segundos para considerar nova entrada da mesma pessoa
-        self.last_update_time = time.time()
+        # Configurações de envio otimizadas
+        self.last_sheets_write = 0
+        self.sheets_write_interval = 30.0  # 30 segundos (mais responsivo)
+        self.pending_data = []
         
-        # Controle de escrita no Google Sheets (ANTI-QUOTA EXCEEDED)
-        self.last_sheets_write = 0              # Último envio para planilha
-        self.sheets_write_interval = 30.0       # Escreve apenas a cada 30 segundos
-        self.pending_data = []                  # Buffer de dados pendentes
-        
-        # Estatísticas detalhadas
-        self.entries_count = 0                  # Quantas pessoas entraram
-        self.exits_count = 0                    # Quantas pessoas saíram
-        self.unique_people_today = set()        # IDs únicos detectados hoje
+        # IDs únicos baseados em posição estável
+        self.person_id_counter = 0
+        self.last_detection_time = time.time()
+
+    def connect(self):
+        """Conecta à porta serial de forma simples"""
+        try:
+            # Auto-detecta porta se necessário
+            if not os.path.exists(self.port):
+                detected_port = self.find_serial_port()
+                if detected_port:
+                    self.port = detected_port
+                else:
+                    logger.error("❌ Nenhuma porta serial encontrada")
+                    return False
+            
+            logger.info(f"🔌 Conectando à porta {self.port}")
+            
+            self.serial_connection = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                timeout=2.0,
+                write_timeout=2.0
+            )
+            
+            time.sleep(3)  # Aguarda estabilização
+            
+            if self.serial_connection.is_open:
+                logger.info(f"✅ Conectado com sucesso!")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Erro na conexão: {e}")
+            
+        return False
 
     def find_serial_port(self):
-        """Detecta automaticamente a porta serial"""
+        """Detecta porta serial automaticamente"""
         ports = list(serial.tools.list_ports.comports())
-        if not ports:
-            logger.error("Nenhuma porta serial encontrada!")
-            return None
         
-        logger.info(f"🔍 Portas seriais disponíveis:")
-        for port in ports:
-            logger.info(f"   📡 {port.device} - {port.description}")
-        
-        # Primeiro tenta a porta configurada
-        for port in ports:
-            if port.device == self.port:
-                logger.info(f"✅ Porta configurada encontrada: {self.port}")
-                return self.port
-        
-        # Se não encontrou, procura por dispositivos apropriados
         for port in ports:
             desc_lower = port.description.lower()
             if any(term in desc_lower for term in
-                  ['usb', 'serial', 'uart', 'cp210', 'ch340', 'ft232', 'arduino', 'esp32', 'jtag', 'modem']):
-                logger.warning(f"Porta {self.port} não encontrada, tentando usar {port.device}")
+                  ['usb', 'serial', 'arduino', 'esp32', 'cp210', 'ch340']):
+                logger.info(f"🔍 Porta detectada: {port.device}")
                 return port.device
         
-        logger.error("Nenhuma porta adequada encontrada!")
         return None
-
-    def connect(self):
-        """Conecta à porta serial com reconexão automática"""
-        max_attempts = 3
-        
-        for attempt in range(max_attempts):
-            try:
-                # Verifica se a porta ainda existe
-                if not os.path.exists(self.port):
-                    logger.warning(f"{self.color} Porta {self.port} não existe mais, detectando nova porta...")
-                    detected_port = self.find_serial_port()
-                    if detected_port:
-                        self.port = detected_port
-                    else:
-                        logger.error(f"{self.color} Tentativa {attempt + 1}/{max_attempts}: Nenhuma porta encontrada")
-                        time.sleep(2)
-                        continue
-                
-                # Fecha conexão anterior se existir
-                if hasattr(self, 'serial_connection') and self.serial_connection:
-                    try:
-                        self.serial_connection.close()
-                    except:
-                        pass
-                
-                logger.info(f"{self.color} Tentativa {attempt + 1}/{max_attempts}: Conectando à porta {self.port}...")
-                
-                self.serial_connection = serial.Serial(
-                    port=self.port,
-                    baudrate=self.baudrate,
-                    timeout=2,  # Aumentado para 2 segundos
-                    write_timeout=2,
-                    bytesize=serial.EIGHTBITS,
-                    parity=serial.PARITY_NONE,
-                    stopbits=serial.STOPBITS_ONE
-                )
-                
-                # Aguarda estabilização
-                time.sleep(3)
-                
-                # Testa a conexão
-                if self.serial_connection.is_open:
-                    logger.info(f"{self.color} ✅ Conexão estabelecida com sucesso!")
-                    return True
-                else:
-                    logger.warning(f"{self.color} ⚠️ Porta aberta mas não está responsiva")
-                    
-            except serial.SerialException as e:
-                logger.error(f"{self.color} ❌ Erro serial na tentativa {attempt + 1}: {str(e)}")
-            except Exception as e:
-                logger.error(f"{self.color} ❌ Erro geral na tentativa {attempt + 1}: {str(e)}")
-            
-            if attempt < max_attempts - 1:
-                wait_time = (attempt + 1) * 2  # Backoff exponencial
-                logger.info(f"{self.color} ⏳ Aguardando {wait_time}s antes da próxima tentativa...")
-                time.sleep(wait_time)
-        
-        logger.error(f"{self.color} ❌ Falha ao conectar após {max_attempts} tentativas")
-        return False
 
     def start(self, gsheets_manager):
         """Inicia o radar"""
@@ -307,7 +242,7 @@ class SingleRadarCounter:
         self.receive_thread = threading.Thread(target=self.receive_data_loop, daemon=True)
         self.receive_thread.start()
         
-        logger.info(f"{self.color} 🚀 Radar iniciado com sucesso!")
+        logger.info(f"🚀 Contador simplificado iniciado!")
         return True
 
     def stop(self):
@@ -320,614 +255,317 @@ class SingleRadarCounter:
             except:
                 pass
         
-        if self.receive_thread and self.receive_thread.is_alive():
-            self.receive_thread.join(timeout=2)
-        
-        logger.info(f"{self.color} 🛑 Radar parado!")
+        logger.info("🛑 Contador parado!")
 
     def receive_data_loop(self):
-        """Loop principal de recebimento de dados com reconexão robusta"""
-        import sys
-        import os
+        """Loop de recebimento simplificado com auto recovery e reset ESP32"""
         buffer = ""
-        consecutive_errors = 0
-        max_consecutive_errors = 5
-        
-        logger.info(f"{self.color} 🔄 Loop de dados iniciado...")
+        falha_leitura_contador = 0
         
         while self.is_running:
             try:
-                # Verifica se a conexão está ativa
                 if not self.serial_connection or not self.serial_connection.is_open:
-                    logger.warning(f"{self.color} ⚠️ Conexão perdida, tentando reconectar...")
+                    logger.warning("⚠️ Conexão perdida, tentando reconectar...")
                     if self.connect():
-                        consecutive_errors = 0  # Reset contador de erros
-                        buffer = ""  # Limpa buffer
+                        buffer = ""
+                        falha_leitura_contador = 0
                         continue
                     else:
-                        consecutive_errors += 1
-                        time.sleep(5)  # Aguarda mais tempo se falhou a reconexão
+                        time.sleep(5)
                         continue
                 
-                # Tenta ler dados
-                in_waiting = self.serial_connection.in_waiting or 0
-                data = self.serial_connection.read(in_waiting or 1)
-                
-                if data:
-                    consecutive_errors = 0  # Reset contador se recebeu dados
+                # Lê dados disponíveis
+                if self.serial_connection.in_waiting > 0:
+                    data = self.serial_connection.read(self.serial_connection.in_waiting)
                     text = data.decode('utf-8', errors='ignore')
                     buffer += text
+                    falha_leitura_contador = 0  # Resetar contador se dados chegarem
                     
+                    # Processa linhas completas
                     if '\n' in buffer:
                         lines = buffer.split('\n')
                         buffer = lines[-1]
                         
                         for line in lines[:-1]:
                             line = line.strip()
-                            if not line or not line.startswith('{'):
-                                continue
-                            
-                            try:
-                                data_json = json.loads(line)
-                                self.process_json_data(data_json)
-                            except json.JSONDecodeError as e:
-                                logger.debug(f"Linha JSON inválida ignorada: {line[:50]}...")
-                            except Exception as e:
-                                logger.error(f"Erro ao processar linha JSON: {e}")
-                
-                time.sleep(0.01)
-                
-            except serial.SerialException as e:
-                consecutive_errors += 1
-                error_msg = str(e)
-                
-                if "Device not configured" in error_msg or "Errno 6" in error_msg:
-                    logger.error(f"{self.color} ❌ Dispositivo desconectado (Erro {consecutive_errors}/{max_consecutive_errors})")
-                    # Força reconexão imediata
-                    try:
-                        if self.serial_connection:
-                            self.serial_connection.close()
-                    except:
-                        pass
-                    self.serial_connection = None
-                    time.sleep(2)
-                elif "Errno 5" in error_msg or "Input/output error" in error_msg:
-                    logger.error(f"{self.color} ❌ Erro de I/O - dispositivo pode ter sido removido")
-                    self.serial_connection = None
-                    time.sleep(3)
+                            if line.startswith('{'):
+                                try:
+                                    data_json = json.loads(line)
+                                    self.process_json_data(data_json)
+                                except json.JSONDecodeError:
+                                    logger.debug(f"JSON inválido: {line[:50]}...")
                 else:
-                    logger.error(f"{self.color} ❌ Erro serial: {error_msg}")
-                    time.sleep(1)
+                    falha_leitura_contador += 1
+                    if falha_leitura_contador >= 100:  # ~10 segundos sem dados (com sleep(0.1))
+                        logger.warning(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] NENHUM DADO RECEBIDO DO RADAR POR MUITO TEMPO. TENTANDO RESETAR ESP32...")
+                        if reset_esp32_via_esptool(ESP32_SERIAL_PORT):
+                            time.sleep(10)  # Dê mais tempo para a ESP32 reiniciar
+                            falha_leitura_contador = 0
+                            # Tenta reconectar após reset
+                            if self.connect():
+                                buffer = ""
+                                continue
+                        else:
+                            logger.error(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] FALHA CRÍTICA: Não foi possível resetar a ESP32.")
+                            time.sleep(10)
+                time.sleep(0.1)
                 
-                # Se muitos erros consecutivos, pausa mais
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.warning(f"{self.color} ⚠️ Muitos erros consecutivos, pausando por 10s...")
-                    time.sleep(10)
-                    consecutive_errors = 0
-                    
             except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"{self.color} ❌ Erro inesperado no loop: {str(e)}")
+                logger.error(f"❌ Erro no loop: {e}")
                 time.sleep(2)
-                
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.warning(f"{self.color} ⚠️ Muitos erros consecutivos, pausando...")
-                    time.sleep(10)
-                    consecutive_errors = 0
-
-    def convert_timestamp(self, timestamp_ms):
-        """Converte timestamp de milissegundos para formato brasileiro aprimorado"""
-        try:
-            # SEMPRE usa tempo atual para evitar problemas com timestamp do Arduino
-            dt = datetime.now()
-            
-            # Formato brasileiro completo: DD/MM/AAAA HH:MM:SS
-            return dt.strftime('%d/%m/%Y %H:%M:%S')
-        except Exception as e:
-            # Em caso de erro, retorna tempo atual
-            logger.debug(f"Erro na conversão de timestamp: {e}")
-            return datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-
-    def format_duration(self, duration_ms):
-        """Formata duração em milissegundos para formato legível"""
-        try:
-            if duration_ms < 1000:
-                return f"{int(duration_ms)}ms"
-            elif duration_ms < 60000:
-                seconds = duration_ms / 1000
-                return f"{seconds:.1f}s"
-            elif duration_ms < 3600000:
-                minutes = duration_ms / 60000
-                return f"{minutes:.1f}min"
-            else:
-                hours = duration_ms / 3600000
-                return f"{hours:.1f}h"
-        except:
-            return "N/A"
-
-    def update_people_count(self, person_count, active_people):
-        """Sistema CORRIGIDO de tracking para eventos - lógica precisa de entrada/saída"""
-        current_time = time.time()
-        
-        # IGNORA person_id do Arduino (não é confiável) - usa posição + distância
-        # Cria IDs únicos baseados em posição e características estáveis
-        current_people_dict = {}
-        
-        for i, person in enumerate(active_people):
-            # Cria ID único baseado em posição estável (não no ID do Arduino)
-            x_pos = person.get('x_pos', 0)
-            y_pos = person.get('y_pos', 0) 
-            distance = person.get('distance_raw', 0)  # ✅ Arduino minimal só envia distance_raw
-            
-            # ✅ CALCULA ZONA ESPECÍFICA DAS ATIVAÇÕES usando coordenadas x,y
-            zone = self.zone_manager.get_zone(x_pos, y_pos)
-            person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
-            
-            # ID baseado na posição arredondada (estável para pessoa parada)
-            stable_id = f"P_{zone}_{distance:.1f}_{i}"
-            
-            # Procura se já existe pessoa similar (mesma zona, distância similar)
-            found_existing = None
-            for existing_id, existing_person in self.current_people.items():
-                existing_dist = existing_person.get('distance_raw', 0)  # ✅ Arduino minimal
-                existing_zone = existing_person.get('zone', '')
-                
-                # Se pessoa está na mesma zona e distância similar (±0.3m), é a mesma
-                if (existing_zone == zone and 
-                    abs(existing_dist - distance) < 0.3):
-                    found_existing = existing_id
-                    break
-            
-            # Se encontrou pessoa similar, mantém ID existente
-            if found_existing:
-                current_people_dict[found_existing] = person
-                current_people_dict[found_existing]['last_seen'] = current_time
-            else:
-                # Nova pessoa detectada
-                person['first_seen'] = current_time
-                person['last_seen'] = current_time
-                # ✅ Adiciona campos padrão que o Arduino minimal não envia
-                person['distance_smoothed'] = distance  # Usa distance_raw como smoothed
-                person['confidence'] = 85  # Valor padrão razoável
-                person['stationary'] = False  # Assume móvel por padrão
-                current_people_dict[stable_id] = person
-        
-        # Detecta ENTRADAS REAIS (novas pessoas que não existiam)
-        new_entries = []
-        for person_id, person_info in current_people_dict.items():
-            if person_id not in self.current_people:
-                # Verifica se não é pessoa que acabou de sair (evita flickering)
-                is_really_new = True
-                for old_id, old_person in self.previous_people.items():
-                    old_zone = old_person.get('zone', '')
-                    old_dist = old_person.get('distance_raw', 0)  # ✅ Arduino minimal
-                    new_zone = person_info.get('zone', '')
-                    new_dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
-                    
-                    # Se pessoa muito similar saiu recentemente, não conta como nova
-                    if (old_zone == new_zone and 
-                        abs(old_dist - new_dist) < 0.5 and
-                        (current_time - old_person.get('last_seen', 0)) < 2.0):
-                        is_really_new = False
-                        break
-                
-                if is_really_new:
-                    new_entries.append(person_id)
-                    self.total_people_detected += 1
-                    self.entries_count += 1
-                    self.unique_people_today.add(person_id)
-                    zone = person_info.get('zone', 'DESCONHECIDA')
-                    dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
-                    logger.info(f"🆕 ENTRADA REAL: {zone} {dist:.1f}m (Total: {self.total_people_detected})")
-        
-        # Detecta SAÍDAS REAIS (pessoas que realmente saíram)
-        exits = []
-        for person_id, person_info in self.current_people.items():
-            if person_id not in current_people_dict:
-                # Pessoa saiu apenas se não foi detectada por tempo suficiente
-                last_seen = person_info.get('last_seen', 0)
-                if (current_time - last_seen) > 1.0:  # 1 segundo de timeout
-                    exits.append(person_id)
-                    self.exits_count += 1
-                    zone = person_info.get('zone', 'DESCONHECIDA')
-                    dist = person_info.get('distance_raw', 0)  # ✅ Arduino minimal
-                    logger.info(f"🚪 SAÍDA REAL: {zone} {dist:.1f}m (Entradas: {self.entries_count}, Saídas: {self.exits_count})")
-        
-        # Atualiza estado
-        self.previous_people = self.current_people.copy()
-        self.current_people = current_people_dict
-        
-        # Atualiza máximo simultâneo
-        current_simultaneous = len(current_people_dict)
-        if current_simultaneous > self.max_simultaneous_people:
-            self.max_simultaneous_people = current_simultaneous
-            logger.info(f"📊 NOVO MÁXIMO SIMULTÂNEO: {self.max_simultaneous_people} pessoas")
-        
-        # Log apenas se houve mudanças reais
-        if new_entries or exits:
-            logger.info(f"📊 STATUS CORRIGIDO: {current_simultaneous} ativas | {self.total_people_detected} total real | Máx: {self.max_simultaneous_people}")
-        
-        self.last_update_time = current_time
 
     def process_json_data(self, data_json):
-        """Processa dados JSON multi-pessoa v4.2 recebidos do radar"""
+        """Processa dados JSON de forma simplificada e eficaz"""
         try:
             radar_id = data_json.get("radar_id", self.radar_id)
             timestamp_ms = data_json.get("timestamp_ms", 0)
             person_count = data_json.get("person_count", 0)
             active_people = data_json.get("active_people", [])
-            tracking_method = data_json.get("tracking_method", "hybrid_multi")
-            session_duration_ms = data_json.get("session_duration_ms", 0)
-            update_rate_hz = data_json.get("update_rate_hz", 8.3)
             
-            # IGNORA dados de contagem do Arduino (não são confiáveis para eventos)
-            # Arduino envia IDs baseados em timestamp/contador interno, não pessoas reais
-            # Vamos usar APENAS nossa lógica Python baseada em posição e movimento real
+            # Timestamp atual
+            formatted_timestamp = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
             
-            # Converte timestamp para formato legível
-            formatted_timestamp = self.convert_timestamp(timestamp_ms)
+            # ✅ TRACKING SIMPLIFICADO MAS EFICAZ
+            self.update_people_tracking(active_people)
             
-            # Atualiza contadores locais também
-            self.update_people_count(person_count, active_people)
+            # ✅ DISPLAY LIMPO E INFORMATIVO
+            if os.getenv('TERM'):
+                os.system('clear')
             
-            # Limpa o terminal e mostra dados em tempo real simplificados
-            os.system('clear')
-            print(f"\n{self.color} ═══ CONTADOR ROBUSTO DE PESSOAS - TRACKING AVANÇADO ═══")
+            print(f"\n{self.color} ═══ CONTADOR SIMPLIFICADO E EFICAZ ═══")
             print(f"⏰ {formatted_timestamp}")
-            print(f"📡 {radar_id} | 👥 ATIVAS: {person_count}")
-            print(f"🎯 TOTAL DETECTADAS: {self.total_people_detected} | 📊 MÁXIMO SIMULTÂNEO: {self.max_simultaneous_people}")
-            print(f"🔄 ENTRADAS: {self.entries_count} | 🚪 SAÍDAS: {self.exits_count}")
-            print(f"🆔 PESSOAS ÚNICAS: {len(self.unique_people_today)}")
+            print(f"📡 {radar_id} | 👥 PESSOAS ATIVAS: {len(active_people)}")
+            print(f"🎯 TOTAL DETECTADAS: {self.total_people_detected}")
+            print(f"📊 MÁXIMO SIMULTÂNEO: {self.max_simultaneous_people}")
             
-            # Mostra duração da sessão
-            session_duration = datetime.now() - self.session_start_time
-            duration_str = self.format_duration(session_duration.total_seconds() * 1000)
-            print(f"⏱️ SESSÃO: {duration_str}")
+            # Runtime
+            runtime = datetime.now() - self.session_start_time
+            runtime_str = f"{runtime.total_seconds()/60:.1f}min"
+            print(f"⏱️ SESSÃO: {runtime_str}")
             
-            # Status do envio para planilha (ANTI-QUOTA)
+            # Status da planilha
             pending_count = len(self.pending_data)
-            time_since_last_send = time.time() - self.last_sheets_write
-            next_send_in = max(0, self.sheets_write_interval - time_since_last_send)
             if pending_count > 0:
-                print(f"📋 BUFFER: {pending_count} linhas | ⏳ Próximo envio em: {next_send_in:.0f}s")
+                print(f"📋 BUFFER: {pending_count} linhas | ⏳ Enviando a cada 30s")
             else:
                 print(f"📋 PLANILHA: Sincronizada ✅")
             
-            if active_people and len(active_people) > 0:
-                print(f"\n👥 PESSOAS DETECTADAS AGORA ({len(active_people)}):")
-                print(f"{'Ativação':<15} {'Dist(m)':<7} {'X,Y':<10} {'Conf%':<5} {'Status':<8} {'Desde':<8}")
-                print("-" * 65)
+            if active_people:
+                print(f"\n👥 DETECÇÕES ATUAIS ({len(active_people)}):")
+                print(f"{'#':<2} {'Distância':<10} {'Zona':<15} {'Confiança':<10}")
+                print("-" * 45)
                 
-                current_time = time.time()
+                distances = []
+                zones = []
+                confidences = []
+                
                 for i, person in enumerate(active_people):
-                    # ✅ Arduino minimal: adapta campos ausentes
-                    confidence = person.get("confidence", 85)  # Valor padrão
-                    distance_raw = person.get("distance_raw", 0)  # Novo campo principal
-                    distance_smoothed = person.get("distance_smoothed", distance_raw)  # Fallback
-                    x_pos = person.get("x_pos", 0)
-                    y_pos = person.get("y_pos", 0)
-                    stationary = person.get("stationary", False)  # Valor padrão
+                    # ✅ USA DIRETAMENTE OS VALORES DO ARDUINO (sem cálculos extras)
+                    distance = person.get("distance_raw", 0)
+                    confidence = person.get("confidence", 85)
                     
-                    # ✅ CALCULA ZONA ESPECÍFICA DAS ATIVAÇÕES usando coordenadas x,y
-                    zone = self.zone_manager.get_zone(x_pos, y_pos)
-                    person["zone"] = zone  # Atualiza o objeto pessoa com a zona correta
+                    # ✅ ZONA SIMPLIFICADA BASEADA APENAS EM DISTÂNCIA
+                    zone = self.zone_manager.get_zone(distance)
+                    zone_desc = self.zone_manager.get_zone_description(zone)
                     
-                    # Encontra ID da nossa lógica interna
-                    our_person_id = None
-                    for internal_id, internal_person in self.current_people.items():
-                        internal_dist = internal_person.get('distance_raw', internal_person.get('distance_smoothed', 0))
-                        if (abs(internal_dist - distance_raw) < 0.1 and
-                            internal_person.get('zone', '') == zone):
-                            our_person_id = internal_id
-                            break
+                    print(f"{i+1:<2} {distance:<10.2f} {zone_desc:<15} {confidence:<10}%")
                     
-                    # Calcula tempo desde primeira detecção (nossa lógica)
-                    if our_person_id and our_person_id in self.current_people:
-                        first_seen = self.current_people[our_person_id].get('first_seen', current_time)
-                        time_in_area = current_time - first_seen
-                        time_str = f"{time_in_area:.0f}s" if time_in_area < 60 else f"{time_in_area/60:.1f}m"
-                    else:
-                        time_str = "novo"
-                    
-                    # Status da pessoa
-                    status = "Parado" if stationary else "Móvel"
-                    pos_str = f"{x_pos:.1f},{y_pos:.1f}"
-                    
-                    zone_desc = self.zone_manager.get_zone_description(zone)[:14]  # Trunca para caber
-                    print(f"{zone_desc:<15} {distance_raw:<7.2f} {pos_str:<10} {confidence:<5}% {status:<8} {time_str:<8}")
+                    distances.append(distance)
+                    zones.append(zone)
+                    confidences.append(confidence)
                 
-                # Envia APENAS UM resumo por ciclo (não uma linha por pessoa)
+                # ✅ PREPARA DADOS PARA PLANILHA (simplificado)
                 if self.gsheets_manager:
-                    # Calcula dados agregados
-                    avg_confidence = sum(p.get("confidence", 0) for p in active_people) / len(active_people)
-                    # ✅ COLETA ZONAS JÁ CORRIGIDAS (calculadas pelo ZoneManager)
-                    zones_detected = list(set(p.get("zone", "N/A") for p in active_people))
-                    zones_str = ",".join(sorted(zones_detected))
-                    
-                    # ID mais profissional baseado no contexto
-                    if len(active_people) == 1:
-                        person_description = "Pessoa Individual"
-                    elif len(active_people) <= 3:
-                        person_description = "Grupo Pequeno"
-                    elif len(active_people) <= 10:
-                        person_description = "Grupo Médio"
-                    elif len(active_people) <= 20:
-                        person_description = "Grupo Grande"
-                    else:
-                        person_description = "Multidão"
+                    avg_distance = sum(distances) / len(distances)
+                    avg_confidence = sum(confidences) / len(confidences)
+                    zones_str = ",".join(sorted(set(zones)))
+                    distances_str = ",".join([f"{d:.1f}" for d in distances])
                     
                     row = [
-                        radar_id,                          # 1. radar_id
-                        formatted_timestamp,               # 2. timestamp
-                        len(active_people),                # 3. person_count (real detectadas agora)
-                        person_description,                # 4. person_id (descrição profissional)
-                        zones_str,                         # 5. zone (todas as zonas ordenadas)
-                        f"{sum(p.get('distance_raw', p.get('distance_smoothed', 0)) for p in active_people) / len(active_people):.1f}",  # 6. distance (média) - Arduino minimal
-                        f"{avg_confidence:.0f}",           # 7. confidence (média)
-                        self.total_people_detected,       # 8. total_detected (nossa contagem real)
-                        self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
+                        radar_id,                           # radar_id
+                        formatted_timestamp,                # timestamp  
+                        len(active_people),                 # person_count
+                        distances_str,                      # distances (todas)
+                        zones_str,                          # zones (únicas)
+                        f"{avg_confidence:.0f}",            # avg_confidence
+                        self.total_people_detected          # total_detected
                     ]
+                    
                     self.pending_data.append(row)
+                    logger.info(f"📋 Dados adicionados: {len(active_people)} pessoas detectadas")
                 
-                print(f"\n💡 DETECTANDO {len(active_people)} pessoa(s) SIMULTANEAMENTE")
-                
-                # Estatísticas por zona (usando zonas já corrigidas)
-                zone_stats = {}
-                high_confidence = 0
-                for person in active_people:
-                    zone = person.get("zone", "N/A")  # Zona já foi corrigida acima
-                    zone_stats[zone] = zone_stats.get(zone, 0) + 1
-                    if person.get("confidence", 0) >= 70:
-                        high_confidence += 1
-                
-                if zone_stats:
-                    print("📊 DISTRIBUIÇÃO POR ATIVAÇÃO:")
-                    for zone, count in zone_stats.items():
-                        zone_desc = self.zone_manager.get_zone_description(zone)
-                        print(f"   • {zone_desc}: {count} pessoa(s)")
-                    print()
-                
-                print(f"✅ QUALIDADE: {high_confidence}/{len(active_people)} com alta confiança (≥70%)")
+                print(f"\n📊 RESUMO:")
+                print(f"   • Distância média: {sum(distances)/len(distances):.1f}m")
+                print(f"   • Confiança média: {sum(confidences)/len(confidences):.0f}%")
+                print(f"   • Zonas ativas: {', '.join(set(self.zone_manager.get_zone_description(z) for z in zones))}")
                 
             else:
-                print(f"\n👻 Nenhuma pessoa detectada no momento.")
+                print(f"\n👻 Nenhuma pessoa detectada no momento")
                 
-                # Envia dados zerados apenas se houve mudança de estado
-                if self.gsheets_manager and len(self.previous_people) > 0:
-                    row = [
-                        radar_id,                          # 1. radar_id
-                        formatted_timestamp,               # 2. timestamp
-                        0,                                 # 3. person_count (zero)
-                        "Area_Vazia",                      # 4. person_id (indicador)
-                        "VAZIA",                           # 5. zone 
-                        "0",                               # 6. distance
-                        "0",                               # 7. confidence
-                        self.total_people_detected,       # 8. total_detected (nossa contagem real)
-                        self.max_simultaneous_people      # 9. max_simultaneous (nosso máximo real)
-                    ]
-                    self.pending_data.append(row)
+                # Envia dados zerados se mudou de estado
+                if self.gsheets_manager and hasattr(self, 'last_person_count'):
+                    if getattr(self, 'last_person_count', 0) > 0:
+                        row = [
+                            radar_id, formatted_timestamp, 0, "0", "VAZIA", "0", self.total_people_detected
+                        ]
+                        self.pending_data.append(row)
+                        logger.info(f"📋 Área vazia detectada")
             
-            print("\n" + "═" * 60)
-            print("🎯 SISTEMA ROBUSTO: Detecta entradas/saídas precisamente")
-            print("⚡ Pressione Ctrl+C para encerrar | Tracking Avançado Ativo")
+            # Armazena último count para detectar mudanças
+            setattr(self, 'last_person_count', len(active_people))
             
-            # Envia dados controladamente (ANTI-QUOTA EXCEEDED)
-            self.send_pending_data_to_sheets()
+            print("\n" + "=" * 50)
+            print("🎯 SISTEMA SIMPLIFICADO E EFICAZ")
+            print("✅ Usa valores diretos do Arduino")  
+            print("✅ Zonas baseadas em distância")
+            print("✅ Tracking preciso e simples")
+            print("✅ Envio otimizado (30s intervalo)")
+            print("⚡ Pressione Ctrl+C para encerrar")
+            
+            # ✅ ENVIA DADOS PARA PLANILHA
+            self.send_pending_data()
             
         except Exception as e:
-            logger.error(f"Erro ao processar dados JSON simplificados: {e}")
-            logger.debug(f"JSON recebido: {data_json}")
+            logger.error(f"❌ Erro processando JSON: {e}")
 
-    def send_pending_data_to_sheets(self):
-        """Envia dados para Google Sheets de forma controlada (ANTI-QUOTA EXCEEDED)"""
+    def update_people_tracking(self, active_people):
+        """Sistema de tracking simplificado mas preciso"""
+        current_time = time.time()
+        
+        # ✅ LÓGICA SIMPLIFICADA: conta pessoas novas por distância única
+        current_distances = set()
+        
+        for person in active_people:
+            distance = person.get("distance_raw", 0)
+            # Agrupa por distância (arredondada para evitar micro-variações)
+            rounded_distance = round(distance, 1)
+            current_distances.add(rounded_distance)
+        
+        # ✅ DETECTA NOVAS PESSOAS (distâncias que não existiam antes)
+        previous_distances = getattr(self, 'last_distances', set())
+        new_distances = current_distances - previous_distances
+        
+        if new_distances:
+            new_count = len(new_distances)
+            self.total_people_detected += new_count
+            logger.info(f"🆕 {new_count} nova(s) pessoa(s) detectada(s)!")
+        
+        # ✅ ATUALIZA MÁXIMO SIMULTÂNEO
+        current_count = len(active_people)
+        if current_count > self.max_simultaneous_people:
+            self.max_simultaneous_people = current_count
+            logger.info(f"📊 Novo máximo simultâneo: {current_count} pessoas")
+        
+        # Armazena para próxima comparação
+        setattr(self, 'last_distances', current_distances)
+        self.last_detection_time = current_time
+
+    def send_pending_data(self):
+        """Envia dados para planilha de forma otimizada"""
         try:
             current_time = time.time()
             
-            # Verifica se já passou tempo suficiente desde último envio
+            # Verifica intervalo
             if (current_time - self.last_sheets_write) < self.sheets_write_interval:
-                return  # Ainda não é hora de enviar
+                return
             
-            # Se não há dados pendentes, não faz nada
             if not self.pending_data or not self.gsheets_manager:
                 return
             
-            # Pega apenas os dados mais recentes (máximo 10 linhas por vez)
-            data_to_send = self.pending_data[-10:] if len(self.pending_data) > 10 else self.pending_data
-            
-            # Envia em lote (mais eficiente)
-            if data_to_send:
-                logger.info(f"📊 Enviando {len(data_to_send)} linhas para Google Sheets...")
+            # Envia todas as linhas pendentes
+            if self.pending_data:
+                logger.info(f"📊 Enviando {len(self.pending_data)} linhas...")
                 
-                # Envia todas as linhas de uma vez (batch)
-                for row in data_to_send:
-                    self.gsheets_manager.worksheet.append_row(row)
-                    time.sleep(0.5)  # Pequena pausa entre linhas
+                for row in self.pending_data:
+                    success = self.gsheets_manager.append_row(row)
+                    if not success:
+                        logger.warning("⚠️ Falha no envio, tentando na próxima")
+                        return
+                    time.sleep(0.3)  # Pausa entre linhas
                 
-                logger.info(f"✅ {len(data_to_send)} linhas enviadas com sucesso!")
-                
-                # Atualiza controles
+                logger.info(f"✅ {len(self.pending_data)} linhas enviadas!")
                 self.last_sheets_write = current_time
-                self.pending_data = []  # Limpa dados enviados
+                self.pending_data = []  # Limpa buffer
                 
         except Exception as e:
-            logger.error(f"❌ Erro ao enviar dados para planilha: {e}")
-            # Em caso de erro, mantém dados para próxima tentativa
-            if "quota" in str(e).lower() or "429" in str(e):
-                logger.warning("⚠️ Quota excedida - aumentando intervalo para 60s")
-                self.sheets_write_interval = 60.0  # Aumenta intervalo se quota excedida
-
-    def get_current_count(self):
-        """Retorna o último person_count recebido"""
-        return len(self.current_people)
-    
-    def get_total_detected(self):
-        """Retorna total de pessoas detectadas na sessão"""
-        return self.total_people_detected
+            logger.error(f"❌ Erro no envio: {e}")
 
     def get_status(self):
-        """Retorna status completo do radar com estatísticas robustas"""
+        """Status simplificado"""
         return {
             'id': self.radar_id,
-            'name': self.radar_name,
-            'port': self.port,
             'running': self.is_running,
-            'connected': self.serial_connection and self.serial_connection.is_open if self.serial_connection else False,
-            'description': self.description,
-            'current_count': self.get_current_count(),
-            'total_detected': self.get_total_detected(),
+            'connected': bool(self.serial_connection and self.serial_connection.is_open),
+            'total_detected': self.total_people_detected,
             'max_simultaneous': self.max_simultaneous_people,
-            'entries_count': self.entries_count,
-            'exits_count': self.exits_count,
-            'unique_people': len(self.unique_people_today),
-            'people_in_area': len(self.current_people),
             'session_duration': (datetime.now() - self.session_start_time).total_seconds()
         }
 
-def list_available_ports():
-    """Lista todas as portas seriais disponíveis para diagnóstico"""
-    ports = list(serial.tools.list_ports.comports())
-    
-    print("\n🔍 DIAGNÓSTICO DE PORTAS SERIAIS")
-    print("=" * 50)
-    
-    if not ports:
-        print("❌ Nenhuma porta serial encontrada!")
-        return []
-    
-    print(f"✅ {len(ports)} porta(s) encontrada(s):")
-    
-    for i, port in enumerate(ports, 1):
-        print(f"\n📡 Porta {i}:")
-        print(f"   Dispositivo: {port.device}")
-        print(f"   Descrição: {port.description}")
-        print(f"   Fabricante: {port.manufacturer or 'N/A'}")
-        print(f"   VID:PID: {port.vid}:{port.pid}" if port.vid and port.pid else "   VID:PID: N/A")
-        print(f"   Serial: {port.serial_number or 'N/A'}")
-        
-        # Identifica se é adequada para o radar
-        desc_lower = port.description.lower()
-        if any(term in desc_lower for term in 
-               ['usb', 'serial', 'uart', 'cp210', 'ch340', 'ft232', 'arduino', 'esp32', 'jtag', 'modem']):
-            print(f"   🎯 ADEQUADA para radar")
-        else:
-            print(f"   ⚠️ Pode não ser adequada para radar")
-    
-    print("\n" + "=" * 50)
-    return [port.device for port in ports]
-
 def main():
-    """Função principal"""
-    logger.info("🚀 Inicializando Contador de Pessoas Single Radar...")
+    """Função principal simplificada"""
+    logger.info("🚀 Iniciando Contador Simplificado...")
     
-    # Mostra diagnóstico de portas
-    available_ports = list_available_ports()
-    
-    # Verifica se a porta configurada existe
-    configured_port = RADAR_CONFIG['port']
-    if configured_port in available_ports:
-        logger.info(f"✅ Porta configurada {configured_port} está disponível")
-    else:
-        logger.warning(f"⚠️ Porta configurada {configured_port} NÃO está disponível")
-        if available_ports:
-            logger.info(f"💡 Portas disponíveis: {', '.join(available_ports)}")
-            # Sugere primeira porta adequada
-            for port_device in available_ports:
-                for port in serial.tools.list_ports.comports():
-                    if port.device == port_device:
-                        desc_lower = port.description.lower()
-                        if any(term in desc_lower for term in 
-                               ['usb', 'serial', 'uart', 'modem']):
-                            logger.info(f"💡 Sugestão: Tente usar a porta {port_device}")
-                            break
-                break
-    
-    # Configura Google Sheets
+    # Google Sheets
     script_dir = os.path.dirname(os.path.abspath(__file__))
     credentials_file = os.path.join(script_dir, 'serial_radar', 'credenciais.json')
     
-    # Verifica se arquivo de credenciais existe
     if not os.path.exists(credentials_file):
-        logger.error(f"❌ Arquivo de credenciais não encontrado: {credentials_file}")
-        logger.info("💡 Crie a pasta 'serial_radar' e coloque o arquivo 'credenciais.json' nela")
+        logger.error(f"❌ Credenciais não encontradas: {credentials_file}")
         return
     
     try:
-        gsheets_manager = GoogleSheetsManager(
+        gsheets_manager = SimpleGoogleSheetsManager(
             credentials_file, 
             RADAR_CONFIG['spreadsheet_id'],
             RADAR_CONFIG['id']
         )
         logger.info("✅ Google Sheets configurado")
     except Exception as e:
-        logger.error(f"❌ Erro ao configurar Google Sheets: {e}")
-        logger.info("💡 Verifique se o arquivo credenciais.json está correto e se o spreadsheet_id é válido")
+        logger.error(f"❌ Erro configurando Sheets: {e}")
         return
     
-    # Inicializa radar
-    radar = SingleRadarCounter(RADAR_CONFIG)
+    # Radar
+    radar = SimpleRadarCounter(RADAR_CONFIG)
     
     try:
-        # Inicia o radar
-        logger.info("🔄 Tentando iniciar o radar...")
         if not radar.start(gsheets_manager):
-            logger.error("❌ Falha ao iniciar o radar")
-            logger.info("💡 Verifique:")
-            logger.info("   - Se o dispositivo está conectado")
-            logger.info("   - Se a porta está correta")
-            logger.info("   - Se outro programa não está usando a porta")
+            logger.error("❌ Falha ao iniciar radar")
             return
         
-        # Exibe status inicial
-        status = radar.get_status()
-        logger.info("=" * 80)
-        logger.info("👥 CONTADOR ROBUSTO DE PESSOAS - SISTEMA ESP32 v4.3 MINIMAL")
-        logger.info("=" * 80)
-        logger.info(f"🔴 {status['name']}: {status['port']}")
-        logger.info(f"📋 {status['description']}")
-        logger.info("🚀 Sistema ADAPTADO v4.3 - Arduino Minimal + Python Robusto:")
-        logger.info("   • Arduino: Envia apenas X,Y,distance_raw (JSON ultra-leve)")
-        logger.info("   • Python: Calcula zonas, confidence, tracking completo")
-        logger.info("   • Redução 70% na transmissão de dados")
-        logger.info("   • Lógica baseada em POSIÇÃO REAL (não IDs do Arduino)")
-        logger.info("   • Detecção precisa de entrada/saída por zona")
-        logger.info("   • Pessoas paradas contam apenas UMA vez")
-        logger.info("   • Anti-flickering: evita contagem duplicada")
-        logger.info("   • Tracking por zona + distância + posição")
-        logger.info("   • Sistema híbrido: Arduino simples + Python inteligente")
-        logger.info("⚡ Sistema ativo - Dados sendo enviados para Google Sheets")
-        logger.info("🔄 Reconexão automática habilitada")
-        logger.info("=" * 80)
+        logger.info("=" * 60)
+        logger.info("🟢 CONTADOR SANTA CRUZ SIMPLIFICADO v1.0")
+        logger.info("=" * 60)
+        logger.info("🎯 CARACTERÍSTICAS:")
+        logger.info("   ✅ Usa valores diretos do Arduino (distance_raw)")
+        logger.info("   ✅ Zonas baseadas apenas em distância")
+        logger.info("   ✅ Tracking simplificado mas preciso") 
+        logger.info("   ✅ Menos complexidade, mais eficácia")
+        logger.info("   ✅ Envio otimizado a cada 30 segundos")
+        logger.info("   ✅ Auto-detecção de porta serial")
+        logger.info("   ✅ Display limpo e informativo")
+        logger.info("🚀 OTIMIZAÇÕES:")
+        logger.info("   • Arduino já calcula distâncias")
+        logger.info("   • Sem cálculos redundantes")
+        logger.info("   • Zonas por faixas de distância")
+        logger.info("   • Tracking por distância única")
+        logger.info("   • Buffer inteligente para planilha")
+        logger.info("=" * 60)
         
-        # Mantém o sistema rodando
-        status_counter = 0
+        # Loop principal simples
         while True:
-            time.sleep(5)
-            status_counter += 1
+            time.sleep(10)
+            status = radar.get_status()
             
-            # Status a cada 30 segundos (6 * 5s = 30s)
-            if status_counter >= 6:
-                status_counter = 0
-                status = radar.get_status()
-                current_count = status['people_in_area']
-                total_detected = status['total_detected']
-                max_simultaneous = status['max_simultaneous']
-                entries = status['entries_count']
-                exits = status['exits_count']
-                unique_people = status['unique_people']
-                
-                if radar.is_running and radar.serial_connection and radar.serial_connection.is_open:
-                    logger.info(f"📊 STATUS ROBUSTO: {current_count} ativas | {total_detected} total | {entries} entradas | {exits} saídas | {unique_people} únicas | Máx: {max_simultaneous}")
-                elif radar.is_running:
-                    logger.warning("⚠️ Radar rodando mas conexão perdida - tentando reconectar...")
-                else:
-                    logger.warning("⚠️ Radar não está ativo")
+            if status['running'] and status['connected']:
+                logger.debug(f"💚 Sistema funcionando: {status['total_detected']} total detectadas")
+            else:
+                logger.warning(f"💛 Problemas na conexão - tentando reconectar...")
     
     except KeyboardInterrupt:
         logger.info("🛑 Encerrando por solicitação do usuário...")
     
     except Exception as e:
-        logger.error(f"❌ Erro inesperado: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error(f"❌ Erro inesperado: {e}")
     
     finally:
         radar.stop()
