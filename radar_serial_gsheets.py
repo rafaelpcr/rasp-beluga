@@ -84,14 +84,7 @@ class GoogleSheetsManager:
                 data.get('product_id'),
                 data.get('satisfaction_score'),
                 data.get('satisfaction_class'),
-                data.get('is_engaged'),
-                # Novos campos emocionais
-                data.get('emotional_state'),
-                data.get('emotional_score'),
-                data.get('emotional_confidence'),
-                data.get('hrv_value'),
-                data.get('breath_regularity'),
-                data.get('heart_trend')
+                data.get('is_engaged')
             ]
             
             # Verificar se há valores None ou problemáticos
@@ -487,250 +480,7 @@ class VitalSignsManager:
             logger.error(f"Erro ao calcular taxa a partir da fase: {str(e)}")
             return None
 
-class EmotionalStateAnalyzer:
-    """
-    Analisador de estados emocionais baseado em HRV (Heart Rate Variability)
-    Baseado no estudo: "Heart Rate Variability is associated with emotion recognition" (Quintana et al., 2012)
-    """
-    def __init__(self):
-        # Parâmetros baseados no estudo científico
-        self.HRV_WINDOW_SIZE = 30  # 30 segundos para cálculo de HRV
-        self.BREATH_WINDOW_SIZE = 20  # 20 segundos para análise respiratória
-        self.EMOTION_UPDATE_INTERVAL = 5  # Atualização a cada 5 segundos
-        
-        # Buffers para armazenar histórico
-        self.heart_rate_buffer = []
-        self.breath_rate_buffer = []
-        self.timestamp_buffer = []
-        
-        # Limites baseados no estudo
-        self.POSITIVE_HRV_THRESHOLD = 0.15  # 15% de variação = positivo
-        self.NEGATIVE_HRV_THRESHOLD = 0.05   # 5% de variação = negativo
-        self.OPTIMAL_BREATH_RATE = (8, 14)   # Respiração profunda e ritmada
-        self.STRESS_BREATH_RATE = (18, 25)   # Respiração curta e rápida
-        self.BASELINE_HEART_RATE = 75         # BPM de referência
-        
-        # Estados emocionais
-        self.current_emotional_state = "NEUTRO"
-        self.emotional_confidence = 0.0
-        self.last_emotion_update = time.time()
-        
-        # Métricas calculadas
-        self.current_hrv = 0.0
-        self.breath_regularity = 0.0
-        self.heart_rate_trend = 0.0
-        
-    def calculate_hrv(self, heart_rates, timestamps):
-        """
-        Calcula a Heart Rate Variability (HRV) baseada na variação dos batimentos
-        """
-        if len(heart_rates) < 3:
-            return 0.0
-            
-        try:
-            # Calcula a variação percentual dos batimentos
-            heart_rate_array = np.array(heart_rates)
-            mean_hr = np.mean(heart_rate_array)
-            
-            if mean_hr == 0:
-                return 0.0
-                
-            # Calcula o coeficiente de variação (CV = std/mean)
-            hrv_cv = np.std(heart_rate_array) / mean_hr
-            
-            # Normaliza para uma escala de 0-1
-            hrv_normalized = min(hrv_cv, 0.3) / 0.3  # Máximo 30% de variação
-            
-            return hrv_normalized
-            
-        except Exception as e:
-            logger.error(f"Erro ao calcular HRV: {str(e)}")
-            return 0.0
-    
-    def calculate_breath_regularity(self, breath_rates):
-        """
-        Calcula a regularidade da respiração baseada na consistência dos valores
-        """
-        if len(breath_rates) < 3:
-            return 0.0
-            
-        try:
-            breath_array = np.array(breath_rates)
-            
-            # Calcula a consistência (inverso da variância)
-            breath_std = np.std(breath_array)
-            breath_mean = np.mean(breath_array)
-            
-            if breath_mean == 0:
-                return 0.0
-                
-            # Regularidade = 1 - (CV normalizado)
-            cv = breath_std / breath_mean
-            regularity = max(0, 1 - (cv / 0.5))  # Máximo 50% de variação
-            
-            return regularity
-            
-        except Exception as e:
-            logger.error(f"Erro ao calcular regularidade respiratória: {str(e)}")
-            return 0.0
-    
-    def calculate_heart_rate_trend(self, heart_rates, timestamps):
-        """
-        Calcula a tendência dos batimentos cardíacos (aumento/diminuição)
-        """
-        if len(heart_rates) < 2:
-            return 0.0
-            
-        try:
-            # Calcula a tendência linear
-            heart_array = np.array(heart_rates)
-            time_array = np.array(timestamps)
-            
-            # Normaliza o tempo para segundos
-            time_normalized = time_array - time_array[0]
-            
-            # Ajuste linear
-            coeffs = np.polyfit(time_normalized, heart_array, 1)
-            slope = coeffs[0]
-            
-            # Normaliza a tendência
-            trend_normalized = np.tanh(slope / 10)  # Usa tanh para limitar entre -1 e 1
-            
-            return trend_normalized
-            
-        except Exception as e:
-            logger.error(f"Erro ao calcular tendência cardíaca: {str(e)}")
-            return 0.0
-    
-    def classify_emotional_state(self, hrv, breath_regularity, heart_trend, current_hr, current_br):
-        """
-        Classifica o estado emocional baseado nos parâmetros fisiológicos
-        """
-        try:
-            # Pontuação baseada no estudo científico
-            score = 0.0
-            confidence = 0.0
-            
-            # 1. Análise da HRV (40% do peso)
-            if hrv > self.POSITIVE_HRV_THRESHOLD:
-                score += 0.4  # Alta HRV = positivo
-                confidence += 0.3
-            elif hrv < self.NEGATIVE_HRV_THRESHOLD:
-                score -= 0.4  # Baixa HRV = negativo
-                confidence += 0.3
-            else:
-                score += 0.0  # HRV neutra
-                confidence += 0.1
-            
-            # 2. Análise da respiração (30% do peso)
-            if self.OPTIMAL_BREATH_RATE[0] <= current_br <= self.OPTIMAL_BREATH_RATE[1]:
-                score += 0.3  # Respiração profunda e ritmada = positivo
-                confidence += 0.3
-            elif self.STRESS_BREATH_RATE[0] <= current_br <= self.STRESS_BREATH_RATE[1]:
-                score -= 0.3  # Respiração rápida = negativo
-                confidence += 0.3
-            else:
-                score += 0.0  # Respiração neutra
-                confidence += 0.1
-            
-            # 3. Análise da regularidade respiratória (20% do peso)
-            if breath_regularity > 0.7:
-                score += 0.2  # Respiração regular = positivo
-                confidence += 0.2
-            elif breath_regularity < 0.3:
-                score -= 0.2  # Respiração irregular = negativo
-                confidence += 0.2
-            else:
-                score += 0.0  # Regularidade neutra
-                confidence += 0.1
-            
-            # 4. Análise da tendência cardíaca (10% do peso)
-            if heart_trend < -0.1:  # Diminuição suave = positivo
-                score += 0.1
-                confidence += 0.1
-            elif heart_trend > 0.1:  # Aumento = negativo
-                score -= 0.1
-                confidence += 0.1
-            else:
-                score += 0.0  # Tendência neutra
-                confidence += 0.05
-            
-            # Classificação final
-            if score >= 0.3:
-                emotional_state = "POSITIVO"
-            elif score <= -0.3:
-                emotional_state = "NEGATIVO"
-            else:
-                emotional_state = "NEUTRO"
-            
-            # Normaliza a confiança
-            confidence = min(confidence, 1.0)
-            
-            return emotional_state, score, confidence
-            
-        except Exception as e:
-            logger.error(f"Erro ao classificar estado emocional: {str(e)}")
-            return "NEUTRO", 0.0, 0.0
-    
-    def update_emotional_state(self, heart_rate, breath_rate):
-        """
-        Atualiza o estado emocional com novos dados fisiológicos
-        """
-        current_time = time.time()
-        
-        # Adiciona novos dados aos buffers
-        self.heart_rate_buffer.append(heart_rate)
-        self.breath_rate_buffer.append(breath_rate)
-        self.timestamp_buffer.append(current_time)
-        
-        # Mantém apenas os dados mais recentes
-        while len(self.heart_rate_buffer) > self.HRV_WINDOW_SIZE:
-            self.heart_rate_buffer.pop(0)
-            self.timestamp_buffer.pop(0)
-        
-        while len(self.breath_rate_buffer) > self.BREATH_WINDOW_SIZE:
-            self.breath_rate_buffer.pop(0)
-        
-        # Atualiza a cada 5 segundos
-        if current_time - self.last_emotion_update >= self.EMOTION_UPDATE_INTERVAL:
-            if len(self.heart_rate_buffer) >= 3 and len(self.breath_rate_buffer) >= 3:
-                # Calcula métricas
-                self.current_hrv = self.calculate_hrv(self.heart_rate_buffer, self.timestamp_buffer)
-                self.breath_regularity = self.calculate_breath_regularity(self.breath_rate_buffer)
-                self.heart_rate_trend = self.calculate_heart_rate_trend(self.heart_rate_buffer, self.timestamp_buffer)
-                
-                # Classifica estado emocional
-                emotional_state, score, confidence = self.classify_emotional_state(
-                    self.current_hrv,
-                    self.breath_regularity,
-                    self.heart_rate_trend,
-                    heart_rate,
-                    breath_rate
-                )
-                
-                self.current_emotional_state = emotional_state
-                self.emotional_confidence = confidence
-                self.last_emotion_update = current_time
-                
-                return emotional_state, score, confidence
-        
-        return self.current_emotional_state, 0.0, self.emotional_confidence
-    
-    def get_emotional_insights(self):
-        """
-        Retorna insights sobre o estado emocional atual
-        """
-        insights = {
-            'state': self.current_emotional_state,
-            'confidence': self.emotional_confidence,
-            'hrv': self.current_hrv,
-            'breath_regularity': self.breath_regularity,
-            'heart_trend': self.heart_rate_trend,
-            'data_points': len(self.heart_rate_buffer)
-        }
-        
-        return insights
-
+# Remover importação da EmotionalStateAnalyzer e campos emocionais
 class SerialRadarManager:
     def __init__(self, port=None, baudrate=115200):
         self.port = port or SERIAL_CONFIG['port']
@@ -741,7 +491,7 @@ class SerialRadarManager:
         self.db_manager = None
         self.analytics_manager = AnalyticsManager()
         self.vital_signs_manager = VitalSignsManager()
-        self.emotional_analyzer = EmotionalStateAnalyzer()  # Novo analisador emocional
+        # self.emotional_analyzer = EmotionalStateAnalyzer()  # Removido
         self.current_session_id = None
         self.last_activity_time = None
         self.SESSION_TIMEOUT = 60  # 1 minuto para identificar novas pessoas
@@ -1108,16 +858,6 @@ class SerialRadarManager:
                 data.get('distance', 0)
             )
         
-        # Análise emocional baseada em HRV
-        emotional_state = "NEUTRO"
-        emotional_score = 0.0
-        emotional_confidence = 0.0
-        
-        if heart_rate is not None and breath_rate is not None:
-            emotional_state, emotional_score, emotional_confidence = self.emotional_analyzer.update_emotional_state(
-                heart_rate, breath_rate
-            )
-        
         distance = data.get('distance', 0)
         if distance == 0:
             x = data.get('x_point', 0)
@@ -1136,14 +876,7 @@ class SerialRadarManager:
             'dop_index': dop_index,
             'heart_rate': heart_rate,
             'breath_rate': breath_rate,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            # Novos campos emocionais
-            'emotional_state': emotional_state,
-            'emotional_score': emotional_score,
-            'emotional_confidence': emotional_confidence,
-            'hrv_value': self.emotional_analyzer.current_hrv,
-            'breath_regularity': self.emotional_analyzer.breath_regularity,
-            'heart_trend': self.emotional_analyzer.heart_rate_trend
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
         section = shelf_manager.get_section_at_position(
@@ -1213,14 +946,6 @@ class SerialRadarManager:
         
         output.extend([
             "-"*50,
-            "🧠 ANÁLISE EMOCIONAL:",
-            f"   Estado: {emotional_state}",
-            f"   Score: {emotional_score:>6.3f}",
-            f"   Confiança: {emotional_confidence:>6.3f}",
-            f"   HRV: {self.emotional_analyzer.current_hrv:>6.3f}",
-            f"   Regularidade Resp.: {self.emotional_analyzer.breath_regularity:>6.3f}",
-            f"   Tendência Cardíaca: {self.emotional_analyzer.heart_rate_trend:>6.3f}",
-            "-"*50,
             "🎯 ANÁLISE:",
             f"   Engajamento: {'✅ Sim' if is_engaged else '❌ Não'}",
             f"   Score: {converted_data['satisfaction_score']:>6.1f}",
@@ -1279,14 +1004,7 @@ def main():
                 'product_id': None,
                 'satisfaction_score': 0.0,
                 'satisfaction_class': 'TEST',
-                'is_engaged': False,
-                # Novos campos emocionais
-                'emotional_state': 'NEUTRO',
-                'emotional_score': 0.0,
-                'emotional_confidence': 0.0,
-                'hrv_value': 0.0,
-                'breath_regularity': 0.0,
-                'heart_trend': 0.0
+                'is_engaged': False
             }
             
             test_result = gsheets_manager.insert_radar_data(test_data)
