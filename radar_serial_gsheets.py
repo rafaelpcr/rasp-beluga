@@ -671,9 +671,6 @@ class SerialRadarManager:
 
     def receive_data_loop(self):
         buffer = ""
-        message_mode = False
-        message_buffer = ""
-        target_data_complete = False
         last_data_time = time.time()
         if not hasattr(self, 'last_valid_data_time'):
             self.last_valid_data_time = time.time()
@@ -682,14 +679,8 @@ class SerialRadarManager:
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
         logger.info(f"🔍 [SERIAL] Aguardando dados da ESP32...")
         
-        # Contador para mostrar atividade
-        loop_count = 0
-        last_activity_log = time.time()
-        
         while self.is_running:
             try:
-                loop_count += 1
-                
                 if not self.serial_connection.is_open:
                     logger.warning("⚠️ Conexão serial fechada, tentando reconectar...")
                     self.connect()
@@ -704,53 +695,31 @@ class SerialRadarManager:
                 if data:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
-                    
                     buffer += text
                     
-                    if '\n' in buffer:
-                        lines = buffer.split('\n')
-                        buffer = lines[-1]
-                        
-                        for line in lines[:-1]:
-                            line = line.strip()
-                            
-                            if '-----Human Detected-----' in line:
-                                if not message_mode:
-                                    logger.info(f"🎯 [SERIAL] DETECÇÃO DE PESSOA ENCONTRADA!")
-                                    message_mode = True
-                                    message_buffer = line + '\n'
-                                    target_data_complete = False
-                                    self.messages_received += 1
-                            elif message_mode:
-                                message_buffer += line + '\n'
-                                
-                                if 'move_speed:' in line:
-                                    logger.info(f"✅ [SERIAL] MENSAGEM COMPLETA - PROCESSANDO...")
-                                    
-                                    target_data_complete = True
-                                    self.process_radar_data(message_buffer)
-                                    self.last_valid_data_time = time.time()  # Atualiza SOMENTE ao processar mensagem completa
-                                    
-                                    message_mode = False
-                                    message_buffer = ""
-                                    target_data_complete = False
-                                    
-                                    # Mostra resumo periódico
-                                    if self.messages_received % 5 == 0:
-                                        logger.info(f"📊 [RESUMO] Mensagens recebidas: {self.messages_received}, Processadas: {self.messages_processed}, Falharam: {self.messages_failed}")
+                    # Processa cada linha recebida
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        logger.info(f"[SERIAL] Linha recebida: {line}")
+                        # Se a linha contém os campos principais, tenta processar
+                        if any(campo in line for campo in ['x_point', 'y_point', 'move_speed', 'heart_rate', 'breath_rate']):
+                            self.process_radar_data(line)
+                            self.last_valid_data_time = time.time()
                 
                 current_time = time.time()
                 if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
                     logger.warning("⚠️ Nenhum dado recebido por mais de 1 minuto. Executando reset automático da ESP32 via DTR/RTS...")
                     self.hardware_reset_esp32()
                     self.last_valid_data_time = current_time
-                    
+                
                 if time.time() - last_data_time > 5:
                     logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
                     last_data_time = time.time()
-                    
-                time.sleep(0.01)
                 
+                time.sleep(0.01)
             except Exception as e:
                 logger.error(f"❌ Erro no loop de recepção: {str(e)}")
                 logger.error(traceback.format_exc())
