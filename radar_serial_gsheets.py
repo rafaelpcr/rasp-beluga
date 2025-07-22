@@ -12,6 +12,7 @@ import threading
 import re
 import math
 from dotenv import load_dotenv
+import json
 
 # Configuração básica de logging
 logging.basicConfig(
@@ -695,6 +696,7 @@ class SerialRadarManager:
                 if data:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
+                    logger.info(f"[DEBUG] Texto bruto recebido da serial: {repr(text)}")
                     buffer += text
                     
                     # Processa cada linha recebida
@@ -778,27 +780,47 @@ class SerialRadarManager:
         return False
 
     def process_radar_data(self, raw_data):
-        data = parse_serial_data(raw_data)
-        if not data:
-            logger.warning(f"❌ [PROCESS] Mensagem falhou no parse! Total de falhas: {self.messages_failed}")
-            self.messages_failed += 1
-            return
+        # Tenta processar como JSON
+        data = None
+        try:
+            json_obj = json.loads(raw_data)
+            # Verifica se tem pessoas ativas
+            if 'active_people' in json_obj and json_obj['active_people']:
+                person = json_obj['active_people'][0]
+                data = {
+                    'x_point': float(person.get('x_pos', 0)),
+                    'y_point': float(person.get('y_pos', 0)),
+                    'distance': float(person.get('distance_raw', 0)),
+                    'confidence': float(person.get('confidence', 0)),
+                    'move_speed': 0.0,  # Se não houver, pode calcular depois
+                    'heart_rate': None,
+                    'breath_rate': None,
+                    'dop_index': 0,
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+            else:
+                logger.warning('[PROCESS] JSON recebido não contém pessoa ativa.')
+                return
+        except Exception:
+            # Se não for JSON, tenta parser antigo
+            data = parse_serial_data(raw_data)
+            if not data:
+                logger.warning(f"❌ [PROCESS] Mensagem falhou no parse! Total de falhas: {self.messages_failed}")
+                self.messages_failed += 1
+                return
 
         self.messages_processed += 1
         logger.info(f"✅ [PROCESS] Mensagem processada com sucesso! Total processadas: {self.messages_processed}")
 
-        # Extrair dados relevantes
         x = data.get('x_point', 0)
         y = data.get('y_point', 0)
-        move_speed = abs(data.get('dop_index', 0) * RANGE_STEP)
+        move_speed = abs(data.get('dop_index', 0) * RANGE_STEP) if 'dop_index' in data else 0.0
         
-        # Verifica se é uma nova pessoa
         if self._is_new_person(x, y, move_speed):
             self.current_session_id = self._generate_session_id()
             self.last_activity_time = time.time()
             self.session_positions = []
         
-        # Atualiza posição atual
         self.last_position = (x, y)
         self.session_positions.append({
             'x': x,
@@ -806,36 +828,26 @@ class SerialRadarManager:
             'speed': move_speed,
             'timestamp': time.time()
         })
-        
-        # Mantém apenas as últimas 10 posições
         if len(self.session_positions) > 10:
             self.session_positions.pop(0)
-
-        # Atualiza a sessão
         self._update_session()
 
-        # Usar os valores de batimentos e respiração diretamente do radar se disponíveis
         heart_rate = data.get('heart_rate')
         breath_rate = data.get('breath_rate')
-        
-        # Se não houver valores diretos, calcular usando as fases
         if heart_rate is None or breath_rate is None:
             heart_rate, breath_rate = self.vital_signs_manager.calculate_vital_signs(
-                data.get('total_phase', 0),
-                data.get('breath_phase', 0),
-                data.get('heart_phase', 0),
+                data.get('total_phase', 0) if 'total_phase' in data else 0,
+                data.get('breath_phase', 0) if 'breath_phase' in data else 0,
+                data.get('heart_phase', 0) if 'heart_phase' in data else 0,
                 data.get('distance', 0)
             )
-        
         distance = data.get('distance', 0)
         if distance == 0:
             x = data.get('x_point', 0)
             y = data.get('y_point', 0)
             distance = (x**2 + y**2)**0.5
-        
-        dop_index = data.get('dop_index', 0)
+        dop_index = data.get('dop_index', 0) if 'dop_index' in data else 0
         move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else 0
-        
         converted_data = {
             'session_id': self.current_session_id,
             'x_point': data.get('x_point', 0),
@@ -847,34 +859,26 @@ class SerialRadarManager:
             'breath_rate': breath_rate,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
-        
         section = shelf_manager.get_section_at_position(
             converted_data['x_point'],
             converted_data['y_point'],
             self.db_manager
         )
-        
         if section:
             converted_data['section_id'] = section['section_id']
             converted_data['product_id'] = section['product_id']
         else:
             converted_data['section_id'] = None
             converted_data['product_id'] = None
-        
-        # Lógica de engajamento
         is_engaged = False
         if section:
             is_engaged = self._check_engagement(section['section_id'], distance, move_speed)
-        
         converted_data['is_engaged'] = is_engaged
-        
         satisfaction_score, satisfaction_class = self.analytics_manager.calculate_satisfaction_score(
             move_speed, heart_rate, breath_rate, distance
         )
         converted_data['satisfaction_score'] = satisfaction_score
         converted_data['satisfaction_class'] = satisfaction_class
-
-        # Formatação da saída
         output = [
             "\n" + "="*50,
             "📡 DADOS DO RADAR",
@@ -882,7 +886,6 @@ class SerialRadarManager:
             f"⏰ {converted_data['timestamp']}",
             "-"*50
         ]
-        
         if section:
             output.extend([
                 f"📍 SEÇÃO: {section['section_name']}",
@@ -893,7 +896,6 @@ class SerialRadarManager:
                 "📍 SEÇÃO: Fora da área monitorada",
                 "   Produto ID: N/A"
             ])
-        
         output.extend([
             "-"*50,
             "📊 POSIÇÃO:",
@@ -904,7 +906,6 @@ class SerialRadarManager:
             "-"*50,
             "❤️ SINAIS VITAIS:"
         ])
-        
         if heart_rate is not None and breath_rate is not None:
             output.extend([
                 f"   Batimentos: {heart_rate:>6.1f} bpm",
@@ -912,7 +913,6 @@ class SerialRadarManager:
             ])
         else:
             output.append("   ⚠️ Aguardando detecção...")
-        
         output.extend([
             "-"*50,
             "🎯 ANÁLISE:",
@@ -921,19 +921,14 @@ class SerialRadarManager:
             f"   Classificação: {converted_data['satisfaction_class']}",
             "="*50 + "\n"
         ])
-        
-        # Exibe a saída formatada
         logger.info("\n".join(output))
-        
         if self.db_manager:
             try:
                 success = self.db_manager.insert_radar_data(converted_data)
-                
                 if success:
                     logger.info(f"✅ [PROCESS] Dados enviados com sucesso para o Google Sheets!")
                 else:
                     logger.error("❌ Falha ao enviar dados para o Google Sheets")
-                    
             except Exception as e:
                 logger.error(f"❌ Erro ao enviar para o Google Sheets: {str(e)}")
                 logger.error(traceback.format_exc())
