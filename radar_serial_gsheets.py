@@ -284,46 +284,36 @@ class AnalyticsManager:
 
     def calculate_satisfaction_score(self, move_speed, heart_rate, breath_rate, distance):
         try:
-            score = 0.0
-            if move_speed is not None:
-                if move_speed <= self.MOVEMENT_THRESHOLD:
-                    score += 30
-                else:
-                    score += max(0, 30 * (1 - move_speed/100))
-            if distance is not None:
-                if distance <= self.DISTANCE_THRESHOLD:
-                    score += 20
-                else:
-                    score += max(0, 20 * (1 - distance/5))
-            if heart_rate is not None:
-                if self.HEART_RATE_NORMAL[0] <= heart_rate <= self.HEART_RATE_NORMAL[1]:
-                    score += 25
-                else:
-                    deviation = min(
-                        abs(heart_rate - self.HEART_RATE_NORMAL[0]),
-                        abs(heart_rate - self.HEART_RATE_NORMAL[1])
-                    )
-                    score += max(0, 25 * (1 - deviation/50))
-            if breath_rate is not None:
-                if self.BREATH_RATE_NORMAL[0] <= breath_rate <= self.BREATH_RATE_NORMAL[1]:
-                    score += 25
-                else:
-                    deviation = min(
-                        abs(breath_rate - self.BREATH_RATE_NORMAL[0]),
-                        abs(breath_rate - self.BREATH_RATE_NORMAL[1])
-                    )
-                    score += max(0, 25 * (1 - deviation/20))
-            if score >= 85:
-                classification = "MUITO_POSITIVA"
-            elif score >= 70:
-                classification = "POSITIVA"
-            elif score >= 50:
-                classification = "NEUTRA"
-            elif score >= 30:
-                classification = "NEGATIVA"
+            # Critérios baseados em estudos fisiológicos
+            # Batimentos cardíacos normais em repouso: 60-100 bpm
+            # Respiração normal em repouso: 12-20 rpm
+            # Velocidade baixa indica interesse/engajamento
+            
+            # Critérios para satisfação POSITIVA
+            heart_rate_positive = 60 <= heart_rate <= 100 if heart_rate is not None else False
+            breath_rate_positive = 12 <= breath_rate <= 20 if breath_rate is not None else False
+            speed_positive = move_speed <= 10.0  # Menos de 10 cm/s
+            
+            # Critérios para satisfação MUITO_POSITIVA
+            heart_rate_very_positive = 65 <= heart_rate <= 85 if heart_rate is not None else False
+            breath_rate_very_positive = 14 <= breath_rate <= 18 if breath_rate is not None else False
+            speed_very_positive = move_speed <= 5.0  # Quase parado
+            
+            # Critérios para satisfação NEGATIVA
+            heart_rate_negative = heart_rate > 120 or heart_rate < 50 if heart_rate is not None else False
+            breath_rate_negative = breath_rate > 25 or breath_rate < 8 if breath_rate is not None else False
+            speed_negative = move_speed > 30.0  # Movimento rápido
+            
+            # Classificação baseada nos critérios (sem considerar distância)
+            if (heart_rate_very_positive and breath_rate_very_positive and speed_very_positive):
+                return (95.0, "MUITO_POSITIVA")
+            elif (heart_rate_positive and breath_rate_positive and speed_positive):
+                return (80.0, "POSITIVA")
+            elif (heart_rate_negative or breath_rate_negative or speed_negative):
+                return (20.0, "NEGATIVA")
             else:
-                classification = "MUITO_NEGATIVA"
-            return (score, classification)
+                return (50.0, "NEUTRA")
+                
         except Exception as e:
             logger.error(f"Erro ao calcular satisfação: {str(e)}")
             return (50.0, "NEUTRA")
@@ -676,10 +666,12 @@ class SerialRadarManager:
         if not hasattr(self, 'last_valid_data_time'):
             self.last_valid_data_time = time.time()
         self.RESET_TIMEOUT = 60  # 1 minuto
-        
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
         logger.info(f"🔍 [SERIAL] Aguardando dados da ESP32...")
-        
+
+        bloco_buffer = ""
+        coletando_bloco = False
+
         while self.is_running:
             try:
                 if not self.serial_connection.is_open:
@@ -687,40 +679,44 @@ class SerialRadarManager:
                     self.connect()
                     time.sleep(1)
                     continue
-                
+
                 in_waiting = self.serial_connection.in_waiting
                 if in_waiting is None:
                     in_waiting = 0
-                
+
                 data = self.serial_connection.read(in_waiting or 1)
                 if data:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
                     logger.info(f"[DEBUG] Texto bruto recebido da serial: {repr(text)}")
                     buffer += text
-                    
-                    # Processa cada linha recebida
+
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
-                        line = line.strip()
-                        if not line:
-                            continue
+                        line = line.strip('\r')  # Remove \r também
                         logger.info(f"[SERIAL] Linha recebida: {line}")
-                        # Se a linha contém os campos principais, tenta processar
-                        if any(campo in line for campo in ['x_point', 'y_point', 'move_speed', 'heart_rate', 'breath_rate']):
-                            self.process_radar_data(line)
-                            self.last_valid_data_time = time.time()
-                
+                        if '-----Human Detected-----' in line:
+                            coletando_bloco = True
+                            bloco_buffer = line + "\n"
+                        elif coletando_bloco:
+                            if line.strip() == "":
+                                # Linha em branco: fim do bloco!
+                                self.process_radar_data(bloco_buffer)
+                                coletando_bloco = False
+                                bloco_buffer = ""
+                            else:
+                                bloco_buffer += line + "\n"
+
                 current_time = time.time()
                 if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
                     logger.warning("⚠️ Nenhum dado recebido por mais de 1 minuto. Executando reset automático da ESP32 via DTR/RTS...")
                     self.hardware_reset_esp32()
                     self.last_valid_data_time = current_time
-                
+
                 if time.time() - last_data_time > 5:
                     logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
                     last_data_time = time.time()
-                
+
                 time.sleep(0.01)
             except Exception as e:
                 logger.error(f"❌ Erro no loop de recepção: {str(e)}")
@@ -762,65 +758,82 @@ class SerialRadarManager:
             return False
 
     def _check_engagement(self, section_id, distance, move_speed):
-        # Adiciona leitura ao buffer
-        self.engagement_buffer.append({
-            'section_id': section_id,
-            'distance': distance,
-            'move_speed': move_speed,
-            'timestamp': time.time()
-        })
-        # Mantém o buffer no tamanho da janela
-        if len(self.engagement_buffer) > self.ENGAGEMENT_WINDOW:
-            self.engagement_buffer.pop(0)
-        # Filtra leituras válidas
-        valid = [e for e in self.engagement_buffer if e['section_id'] == section_id and e['distance'] <= self.ENGAGEMENT_DISTANCE and e['move_speed'] <= self.ENGAGEMENT_SPEED]
-        # Engajamento se houver pelo menos ENGAGEMENT_MIN_COUNT leituras consecutivas válidas
-        if len(valid) >= self.ENGAGEMENT_MIN_COUNT:
+        # Engajamento: basta a última leitura ser válida
+        if section_id is not None and distance <= self.ENGAGEMENT_DISTANCE and move_speed <= self.ENGAGEMENT_SPEED:
             return True
         return False
 
     def process_radar_data(self, raw_data):
-        # Tenta processar como JSON
-        data = None
-        try:
-            json_obj = json.loads(raw_data)
-            # Verifica se tem pessoas ativas
-            if 'active_people' in json_obj and json_obj['active_people']:
-                person = json_obj['active_people'][0]
-                data = {
-                    'x_point': float(person.get('x_pos', 0)),
-                    'y_point': float(person.get('y_pos', 0)),
-                    'distance': float(person.get('distance_raw', 0)),
-                    'confidence': float(person.get('confidence', 0)),
-                    'move_speed': 0.0,  # Se não houver, pode calcular depois
-                    'heart_rate': None,
-                    'breath_rate': None,
-                    'dop_index': 0,
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
-            else:
-                logger.warning('[PROCESS] JSON recebido não contém pessoa ativa.')
-                return
-        except Exception:
-            # Se não for JSON, tenta parser antigo
-            data = parse_serial_data(raw_data)
-            if not data:
-                logger.warning(f"❌ [PROCESS] Mensagem falhou no parse! Total de falhas: {self.messages_failed}")
-                self.messages_failed += 1
-                return
-
+        # Novo parser para o formato mostrado na imagem
+        def parse_radar_text_block(text):
+            lines = text.strip().split('\n')
+            data = {}
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    key = key.strip().lower().replace(' ', '_')
+                    value = value.strip().replace(' cm/s', '')
+                    try:
+                        data[key] = float(value)
+                    except ValueError:
+                        try:
+                            data[key] = int(value)
+                        except ValueError:
+                            data[key] = value
+            # Renomear para os nomes esperados
+            return {
+                'x_point': data.get('x_point', 0),
+                'y_point': data.get('y_point', 0),
+                'move_speed': data.get('move_speed', 0),
+                'heart_rate': data.get('heart_rate', None),
+                'breath_rate': data.get('breath_rate', None),
+                'distance': data.get('distance', 0),
+                'dop_index': data.get('dop_index', 0),
+                'total_phase': data.get('total_phase', 0),
+                'breath_phase': data.get('breath_phase', 0),
+                'heart_phase': data.get('heart_phase', 0),
+                'cluster_index': data.get('cluster_index', 0),
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        # Detecta se é o formato texto do radar
+        if '-----Human Detected-----' in raw_data and 'Target 1:' in raw_data:
+            data = parse_radar_text_block(raw_data)
+        else:
+            # Tenta JSON ou parser antigo
+            try:
+                import json
+                json_obj = json.loads(raw_data)
+                if 'active_people' in json_obj and json_obj['active_people']:
+                    person = json_obj['active_people'][0]
+                    data = {
+                        'x_point': float(person.get('x_pos', 0)),
+                        'y_point': float(person.get('y_pos', 0)),
+                        'distance': float(person.get('distance_raw', 0)),
+                        'confidence': float(person.get('confidence', 0)),
+                        'move_speed': 0.0,
+                        'heart_rate': None,
+                        'breath_rate': None,
+                        'dop_index': 0,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                else:
+                    logger.warning('[PROCESS] JSON recebido não contém pessoa ativa.')
+                    return
+            except Exception:
+                data = parse_serial_data(raw_data)
+                if not data:
+                    logger.warning(f"❌ [PROCESS] Mensagem falhou no parse! Total de falhas: {self.messages_failed}")
+                    self.messages_failed += 1
+                    return
         self.messages_processed += 1
         logger.info(f"✅ [PROCESS] Mensagem processada com sucesso! Total processadas: {self.messages_processed}")
-
         x = data.get('x_point', 0)
         y = data.get('y_point', 0)
-        move_speed = abs(data.get('dop_index', 0) * RANGE_STEP) if 'dop_index' in data else 0.0
-        
+        move_speed = abs(data.get('dop_index', 0) * RANGE_STEP) if 'dop_index' in data else data.get('move_speed', 0)
         if self._is_new_person(x, y, move_speed):
             self.current_session_id = self._generate_session_id()
             self.last_activity_time = time.time()
             self.session_positions = []
-        
         self.last_position = (x, y)
         self.session_positions.append({
             'x': x,
@@ -831,14 +844,13 @@ class SerialRadarManager:
         if len(self.session_positions) > 10:
             self.session_positions.pop(0)
         self._update_session()
-
         heart_rate = data.get('heart_rate')
         breath_rate = data.get('breath_rate')
         if heart_rate is None or breath_rate is None:
             heart_rate, breath_rate = self.vital_signs_manager.calculate_vital_signs(
-                data.get('total_phase', 0) if 'total_phase' in data else 0,
-                data.get('breath_phase', 0) if 'breath_phase' in data else 0,
-                data.get('heart_phase', 0) if 'heart_phase' in data else 0,
+                data.get('total_phase', 0),
+                data.get('breath_phase', 0),
+                data.get('heart_phase', 0),
                 data.get('distance', 0)
             )
         distance = data.get('distance', 0)
@@ -847,7 +859,7 @@ class SerialRadarManager:
             y = data.get('y_point', 0)
             distance = (x**2 + y**2)**0.5
         dop_index = data.get('dop_index', 0) if 'dop_index' in data else 0
-        move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else 0
+        move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else data.get('move_speed', 0)
         converted_data = {
             'session_id': self.current_session_id,
             'x_point': data.get('x_point', 0),
