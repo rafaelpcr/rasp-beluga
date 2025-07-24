@@ -16,7 +16,7 @@ import json
 
 # Configuração básica de logging
 logging.basicConfig(
-    level=logging.INFO,  # Mudando para INFO para reduzir poluição do terminal
+    level=logging.DEBUG,  # Alterado para DEBUG para mostrar logs detalhados
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('radar_serial.log'),
@@ -72,6 +72,8 @@ class GoogleSheetsManager:
 
     def insert_radar_data(self, data):
         try:
+            # DEBUG: Mostra os dados recebidos antes de enviar
+            logger.debug(f"[DEBUG] Dados recebidos para envio ao Google Sheets: {data}")
             row = [
                 data.get('session_id'),
                 data.get('timestamp'),
@@ -289,20 +291,20 @@ class AnalyticsManager:
             # Respiração normal em repouso: 12-20 rpm
             # Velocidade baixa indica interesse/engajamento
             
-            # Critérios para satisfação POSITIVA
-            heart_rate_positive = 60 <= heart_rate <= 100 if heart_rate is not None else False
-            breath_rate_positive = 12 <= breath_rate <= 20 if breath_rate is not None else False
-            speed_positive = move_speed <= 10.0  # Menos de 10 cm/s
+            # Critérios para satisfação POSITIVA (ajustados)
+            heart_rate_positive = 55 <= heart_rate <= 110 if heart_rate is not None else False
+            breath_rate_positive = 10 <= breath_rate <= 22 if breath_rate is not None else False
+            speed_positive = move_speed <= 15.0  # Menos de 15 cm/s
             
-            # Critérios para satisfação MUITO_POSITIVA
-            heart_rate_very_positive = 65 <= heart_rate <= 85 if heart_rate is not None else False
-            breath_rate_very_positive = 14 <= breath_rate <= 18 if breath_rate is not None else False
-            speed_very_positive = move_speed <= 5.0  # Quase parado
+            # Critérios para satisfação MUITO_POSITIVA (ajustados)
+            heart_rate_very_positive = 65 <= heart_rate <= 90 if heart_rate is not None else False
+            breath_rate_very_positive = 13 <= breath_rate <= 18 if breath_rate is not None else False
+            speed_very_positive = move_speed <= 7.0  # Quase parado
             
-            # Critérios para satisfação NEGATIVA
-            heart_rate_negative = heart_rate > 120 or heart_rate < 50 if heart_rate is not None else False
-            breath_rate_negative = breath_rate > 25 or breath_rate < 8 if breath_rate is not None else False
-            speed_negative = move_speed > 30.0  # Movimento rápido
+            # Critérios para satisfação NEGATIVA (ajustados)
+            heart_rate_negative = heart_rate > 130 or heart_rate < 45 if heart_rate is not None else False
+            breath_rate_negative = breath_rate > 28 or breath_rate < 7 if breath_rate is not None else False
+            speed_negative = move_speed > 25.0  # Movimento rápido
             
             # Classificação baseada nos critérios (sem considerar distância)
             if (heart_rate_very_positive and breath_rate_very_positive and speed_very_positive):
@@ -313,7 +315,7 @@ class AnalyticsManager:
                 return (20.0, "NEGATIVA")
             else:
                 return (50.0, "NEUTRA")
-                
+            
         except Exception as e:
             logger.error(f"Erro ao calcular satisfação: {str(e)}")
             return (50.0, "NEUTRA")
@@ -486,8 +488,16 @@ class SerialRadarManager:
         self.current_session_id = None
         self.last_activity_time = None
         self.SESSION_TIMEOUT = 60  # 1 minuto para identificar novas pessoas
+        
+        # === SISTEMA DE RESET SINCRONIZADO COM O RADAR ===
         self.last_valid_data_time = time.time()  # Timestamp do último dado válido
-        self.RESET_TIMEOUT = 60  # 1 minuto
+        self.RESET_TIMEOUT = 5 * 60  # 5 minutos (sincronizado com o radar)
+        self.RECONNECT_TIMEOUT = 30  # 30 segundos para tentar reconectar após reset
+        self.reset_count = 0  # Contador de resets
+        self.last_reset_time = time.time()  # Timestamp do último reset
+        self.connection_attempts = 0  # Tentativas de reconexão
+        self.MAX_CONNECTION_ATTEMPTS = 5  # Máximo de tentativas de reconexão
+        
         # Buffer para engajamento
         self.engagement_buffer = []
         self.ENGAGEMENT_WINDOW = 1
@@ -617,6 +627,7 @@ class SerialRadarManager:
         self.receive_thread.start()
         
         logger.info("✅ Receptor de dados seriais iniciado!")
+        logger.info(f"📊 [START] Configuração de reset: {self.RESET_TIMEOUT}s timeout, {self.MAX_CONNECTION_ATTEMPTS} tentativas de reconexão")
         return True
 
     def stop(self):
@@ -629,6 +640,24 @@ class SerialRadarManager:
         if self.receive_thread and self.receive_thread.is_alive():
             self.receive_thread.join(timeout=2)
         logger.info("Receptor de dados seriais parado!")
+        
+    def get_reset_stats(self):
+        """
+        Retorna estatísticas do sistema de reset
+        """
+        current_time = time.time()
+        uptime = current_time - self.last_reset_time if self.last_reset_time > 0 else 0
+        
+        stats = {
+            'reset_count': self.reset_count,
+            'connection_attempts': self.connection_attempts,
+            'uptime_since_last_reset': uptime,
+            'last_reset_time': time.strftime('%H:%M:%S', time.localtime(self.last_reset_time)) if self.last_reset_time > 0 else 'N/A',
+            'time_since_last_data': current_time - self.last_valid_data_time,
+            'connection_status': 'Ativa' if self.serial_connection and self.serial_connection.is_open else 'Inativa'
+        }
+        
+        return stats
 
     def hardware_reset_esp32(self):
         """
@@ -660,44 +689,150 @@ class SerialRadarManager:
             logger.error(traceback.format_exc())
             return False
 
+    def detect_radar_reset(self):
+        """
+        Detecta se o radar reiniciou baseado nos dados recebidos
+        """
+        try:
+            if not self.serial_connection or not self.serial_connection.is_open:
+                return False
+            
+            # Verifica se há dados de inicialização do radar
+            if self.serial_connection.in_waiting > 0:
+                data = self.serial_connection.read(self.serial_connection.in_waiting)
+                text = data.decode('utf-8', errors='ignore')
+                
+                # Detecta mensagens de inicialização do radar
+                if 'Sensor mmWave inicializado' in text:
+                    logger.info("🔄 [RESET_DETECT] Radar reiniciou - detectado 'Sensor mmWave inicializado'")
+                    return True
+                elif 'Timeout de 5 minutos - Reiniciando sistema' in text:
+                    logger.info("🔄 [RESET_DETECT] Radar reiniciou - detectado timeout de 5 minutos")
+                    return True
+            
+            return False
+        except Exception as e:
+            logger.error(f"❌ [RESET_DETECT] Erro ao detectar reset do radar: {e}")
+            return False
+
+    def handle_radar_reset(self):
+        """
+        Gerencia o processo de reset do radar
+        """
+        try:
+            self.reset_count += 1
+            self.last_reset_time = time.time()
+            self.connection_attempts = 0
+            
+            logger.warning(f"🔄 [RESET_HANDLE] Radar reiniciou! Reset #{self.reset_count}")
+            logger.info(f"⏰ [RESET_HANDLE] Último reset: {time.strftime('%H:%M:%S', time.localtime(self.last_reset_time))}")
+            
+            # Aguarda o radar inicializar (5-10 segundos)
+            logger.info("⏳ [RESET_HANDLE] Aguardando inicialização do radar...")
+            time.sleep(5)
+            
+            # Tenta reconectar
+            success = self.reconnect_after_reset()
+            
+            if success:
+                logger.info("✅ [RESET_HANDLE] Reconexão após reset bem-sucedida!")
+                self.last_valid_data_time = time.time()  # Reset do timer
+                return True
+            else:
+                logger.error("❌ [RESET_HANDLE] Falha na reconexão após reset!")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ [RESET_HANDLE] Erro ao gerenciar reset do radar: {e}")
+            return False
+
+    def reconnect_after_reset(self):
+        """
+        Tenta reconectar após um reset do radar
+        """
+        try:
+            logger.info("🔄 [RECONNECT] Tentando reconectar após reset...")
+            
+            # Fecha conexão atual se estiver aberta
+            if self.serial_connection and self.serial_connection.is_open:
+                self.serial_connection.close()
+                time.sleep(1)
+            
+            # Tenta reconectar várias vezes
+            for attempt in range(self.MAX_CONNECTION_ATTEMPTS):
+                self.connection_attempts += 1
+                logger.info(f"🔄 [RECONNECT] Tentativa {attempt + 1}/{self.MAX_CONNECTION_ATTEMPTS}")
+                
+                if self.connect():
+                    logger.info("✅ [RECONNECT] Reconexão bem-sucedida!")
+                    return True
+                
+                # Aguarda antes da próxima tentativa
+                wait_time = (attempt + 1) * 2  # 2, 4, 6, 8, 10 segundos
+                logger.info(f"⏳ [RECONNECT] Aguardando {wait_time}s antes da próxima tentativa...")
+                time.sleep(wait_time)
+            
+            logger.error(f"❌ [RECONNECT] Falha em todas as {self.MAX_CONNECTION_ATTEMPTS} tentativas de reconexão")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ [RECONNECT] Erro durante reconexão: {e}")
+            return False
+
     def receive_data_loop(self):
         buffer = ""
         last_data_time = time.time()
-        if not hasattr(self, 'last_valid_data_time'):
-            self.last_valid_data_time = time.time()
-        self.RESET_TIMEOUT = 60  # 1 minuto
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
         logger.info(f"🔍 [SERIAL] Aguardando dados da ESP32...")
+        logger.info(f"⏰ [SERIAL] Timeout configurado: {self.RESET_TIMEOUT} segundos ({self.RESET_TIMEOUT/60:.1f} minutos)")
 
         bloco_buffer = ""
         coletando_bloco = False
+        last_status_time = time.time()
 
         while self.is_running:
             try:
-                if not self.serial_connection.is_open:
+                current_time = time.time()
+                
+                # Verifica se a conexão está aberta
+                if not self.serial_connection or not self.serial_connection.is_open:
                     logger.warning("⚠️ Conexão serial fechada, tentando reconectar...")
-                    self.connect()
-                    time.sleep(1)
+                    if not self.connect():
+                        logger.error("❌ Falha na reconexão, aguardando 5 segundos...")
+                        time.sleep(5)
+                        continue
+
+                # Verifica se o radar reiniciou
+                if self.detect_radar_reset():
+                    logger.info("🔄 Reset do radar detectado!")
+                    self.handle_radar_reset()
+                    buffer = ""  # Limpa o buffer
+                    bloco_buffer = ""
+                    coletando_bloco = False
                     continue
 
+                # Lê dados da serial
                 in_waiting = self.serial_connection.in_waiting
                 if in_waiting is None:
                     in_waiting = 0
 
                 data = self.serial_connection.read(in_waiting or 1)
                 if data:
-                    last_data_time = time.time()
+                    last_data_time = current_time
+                    self.last_valid_data_time = current_time  # Atualiza timestamp de dados válidos
                     text = data.decode('utf-8', errors='ignore')
-                    logger.info(f"[DEBUG] Texto bruto recebido da serial: {repr(text)}")
+                    logger.debug(f"[DEBUG] Dado bruto recebido da serial: {repr(text)}")
                     buffer += text
 
+                    # Processa linha por linha
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip('\r')  # Remove \r também
-                        logger.info(f"[SERIAL] Linha recebida: {line}")
+                        
                         if '-----Human Detected-----' in line:
                             coletando_bloco = True
                             bloco_buffer = line + "\n"
+                            logger.debug(f"[SERIAL] Iniciando coleta de bloco de dados")
                         elif coletando_bloco:
                             if line.strip() == "":
                                 # Linha em branco: fim do bloco!
@@ -707,17 +842,40 @@ class SerialRadarManager:
                             else:
                                 bloco_buffer += line + "\n"
 
-                current_time = time.time()
-                if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
-                    logger.warning("⚠️ Nenhum dado recebido por mais de 1 minuto. Executando reset automático da ESP32 via DTR/RTS...")
-                    self.hardware_reset_esp32()
-                    self.last_valid_data_time = current_time
+                # === VERIFICAÇÃO DE TIMEOUT SINCRONIZADA COM O RADAR ===
+                time_since_last_data = current_time - self.last_valid_data_time
+                
+                if time_since_last_data > self.RESET_TIMEOUT:
+                    logger.warning(f"⚠️ [TIMEOUT] Nenhum dado recebido por {time_since_last_data/60:.1f} minutos")
+                    logger.warning(f"🔄 [TIMEOUT] Radar deve ter reiniciado automaticamente")
+                    logger.info(f"⏳ [TIMEOUT] Aguardando radar reinicializar...")
+                    
+                    # Aguarda o radar reinicializar (pode levar alguns segundos)
+                    time.sleep(10)
+                    
+                    # Tenta reconectar
+                    if self.reconnect_after_reset():
+                        logger.info("✅ [TIMEOUT] Reconexão após timeout bem-sucedida!")
+                        self.last_valid_data_time = current_time
+                    else:
+                        logger.error("❌ [TIMEOUT] Falha na reconexão após timeout!")
+                        # Tenta reset via hardware como último recurso
+                        self.hardware_reset_esp32()
+                        time.sleep(5)
 
-                if time.time() - last_data_time > 5:
-                    logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
-                    last_data_time = time.time()
+                # Status periódico a cada 30 segundos
+                if current_time - last_status_time > 30:
+                    last_status_time = current_time
+                    time_since_data = current_time - self.last_valid_data_time
+                    logger.info(f"📊 [STATUS] Tempo desde último dado: {time_since_data/60:.1f} min | Reset count: {self.reset_count}")
+
+                # Verificação de inatividade a cada 5 segundos
+                if current_time - last_data_time > 5:
+                    logger.debug("⏳ Nenhum dado recebido nos últimos 5 segundos")
+                    last_data_time = current_time
 
                 time.sleep(0.01)
+                
             except Exception as e:
                 logger.error(f"❌ Erro no loop de recepção: {str(e)}")
                 logger.error(traceback.format_exc())
@@ -1059,10 +1217,12 @@ breath_rate: 15.0"""
             
             # Mostra status a cada 30 segundos
             if loop_count % 30 == 0:
+                reset_stats = radar_manager.get_reset_stats()
                 logger.info(f"📊 [STATUS] Sistema rodando há {loop_count} segundos")
                 logger.info(f"📊 [STATUS] Mensagens: Recebidas={radar_manager.messages_received}, Processadas={radar_manager.messages_processed}, Falharam={radar_manager.messages_failed}")
                 logger.info(f"📊 [STATUS] Conexão serial: {'✅ Ativa' if radar_manager.serial_connection and radar_manager.serial_connection.is_open else '❌ Inativa'}")
                 logger.info(f"📊 [STATUS] Thread de recepção: {'✅ Ativa' if radar_manager.receive_thread and radar_manager.receive_thread.is_alive() else '❌ Inativa'}")
+                logger.info(f"📊 [STATUS] Reset: Count={reset_stats['reset_count']}, Último={reset_stats['last_reset_time']}, Tempo sem dados={reset_stats['time_since_last_data']/60:.1f}min")
             
     except KeyboardInterrupt:
         logger.info("🔄 Encerrando por interrupção do usuário...")
