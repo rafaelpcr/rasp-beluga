@@ -284,49 +284,49 @@ class AnalyticsManager:
 
     def calculate_satisfaction_score(self, move_speed, heart_rate, breath_rate, distance):
         try:
-            # Critérios baseados em estudos fisiológicos
-            # Batimentos cardíacos normais em repouso: 60-100 bpm
-            # Respiração normal em repouso: 12-20 rpm
-            # Velocidade baixa indica interesse/engajamento
-            
-            # Critérios para satisfação POSITIVA
-            heart_rate_positive = 60 <= heart_rate <= 100 if heart_rate is not None else False
-            breath_rate_positive = 12 <= breath_rate <= 20 if breath_rate is not None else False
-            speed_positive = move_speed <= 10.0  # Menos de 10 cm/s
-            
-            # Critérios para satisfação MUITO_POSITIVA
-            heart_rate_very_positive = 65 <= heart_rate <= 85 if heart_rate is not None else False
-            breath_rate_very_positive = 14 <= breath_rate <= 18 if breath_rate is not None else False
-            speed_very_positive = move_speed <= 5.0  # Quase parado
-            
-            # Critérios para satisfação NEGATIVA
-            heart_rate_negative = heart_rate > 120 or heart_rate < 50 if heart_rate is not None else False
-            breath_rate_negative = breath_rate > 25 or breath_rate < 8 if breath_rate is not None else False
-            speed_negative = move_speed > 30.0  # Movimento rápido
-            
-            # Classificação baseada nos critérios (sem considerar distância)
-            if (heart_rate_very_positive and breath_rate_very_positive and speed_very_positive):
+            # Considera NEUTRA se algum valor for None ou 0 (ausência de leitura)
+            if heart_rate is None or breath_rate is None or heart_rate == 0 or breath_rate == 0:
+                return (60.0, "NEUTRA")
+
+            # MUITO_POSITIVA
+            if (65 <= heart_rate <= 90 and 13 <= breath_rate <= 18 and move_speed < 6):
                 return (95.0, "MUITO_POSITIVA")
-            elif (heart_rate_positive and breath_rate_positive and speed_positive):
+            # POSITIVA
+            elif (60 <= heart_rate <= 100 and 12 <= breath_rate <= 20 and move_speed < 12):
                 return (80.0, "POSITIVA")
-            elif (heart_rate_negative or breath_rate_negative or speed_negative):
-                return (20.0, "NEGATIVA")
+            # NEUTRA
+            elif (55 <= heart_rate <= 110 and 10 <= breath_rate <= 22 and move_speed < 25):
+                return (60.0, "NEUTRA")
+            # NEGATIVA
             else:
-                return (50.0, "NEUTRA")
-                
+                return (20.0, "NEGATIVA")
         except Exception as e:
             logger.error(f"Erro ao calcular satisfação: {str(e)}")
-            return (50.0, "NEUTRA")
+            return (60.0, "NEUTRA")
 
 class VitalSignsManager:
     def __init__(self):
         self.SAMPLE_RATE = 20
-        self.heart_phase_buffer = []
-        self.breath_phase_buffer = []
-        self.quality_buffer = []
+        # Inicializa buffers com tamanho máximo para evitar crescimento indefinido
         self.HEART_BUFFER_SIZE = 20
         self.BREATH_BUFFER_SIZE = 30
         self.QUALITY_BUFFER_SIZE = 10
+        self.HISTORY_SIZE = 10
+        
+        # Inicializa buffers com tamanho máximo
+        self.heart_phase_buffer = [0.0] * self.HEART_BUFFER_SIZE
+        self.breath_phase_buffer = [0.0] * self.BREATH_BUFFER_SIZE
+        self.quality_buffer = [0.0] * self.QUALITY_BUFFER_SIZE
+        self.heart_rate_history = [0.0] * self.HISTORY_SIZE
+        self.breath_rate_history = [0.0] * self.HISTORY_SIZE
+        
+        # Contadores para controle de buffer circular
+        self.heart_buffer_index = 0
+        self.breath_buffer_index = 0
+        self.quality_buffer_index = 0
+        self.heart_history_index = 0
+        self.breath_history_index = 0
+        
         self.last_heart_rate = None
         self.last_breath_rate = None
         self.last_quality_score = 0
@@ -336,9 +336,6 @@ class VitalSignsManager:
             'heart_rate': (40, 140),
             'breath_rate': (8, 25)
         }
-        self.heart_rate_history = []
-        self.breath_rate_history = []
-        self.HISTORY_SIZE = 10
 
     def calculate_signal_quality(self, phase_data, distance):
         try:
@@ -369,9 +366,9 @@ class VitalSignsManager:
                            variance_score * 0.4 +
                            amplitude_score * 0.3)
                            
-            self.quality_buffer.append(quality_score)
-            if len(self.quality_buffer) > self.QUALITY_BUFFER_SIZE:
-                self.quality_buffer.pop(0)
+            # Buffer circular para qualidade
+            self.quality_buffer[self.quality_buffer_index] = quality_score
+            self.quality_buffer_index = (self.quality_buffer_index + 1) % self.QUALITY_BUFFER_SIZE
                 
             self.last_quality_score = np.mean(self.quality_buffer)
             return self.last_quality_score
@@ -391,13 +388,16 @@ class VitalSignsManager:
             quality_score = self.calculate_signal_quality(heart_phase, distance)
             if quality_score < self.MIN_QUALITY_SCORE:
                 return None, None
-            self.heart_phase_buffer.append(heart_phase)
-            self.breath_phase_buffer.append(breath_phase)
-            while len(self.heart_phase_buffer) > self.HEART_BUFFER_SIZE:
-                self.heart_phase_buffer.pop(0)
-            while len(self.breath_phase_buffer) > self.BREATH_BUFFER_SIZE:
-                self.breath_phase_buffer.pop(0)
-            if len(self.heart_phase_buffer) < self.HEART_BUFFER_SIZE * 0.7:
+            # Buffer circular para fases
+            self.heart_phase_buffer[self.heart_buffer_index] = heart_phase
+            self.breath_phase_buffer[self.breath_buffer_index] = breath_phase
+            
+            self.heart_buffer_index = (self.heart_buffer_index + 1) % self.HEART_BUFFER_SIZE
+            self.breath_buffer_index = (self.breath_buffer_index + 1) % self.BREATH_BUFFER_SIZE
+            
+            # Verifica se temos dados suficientes (70% do buffer preenchido)
+            heart_data_count = min(self.heart_buffer_index, self.HEART_BUFFER_SIZE)
+            if heart_data_count < self.HEART_BUFFER_SIZE * 0.7:
                 return None, None
             heart_weights = np.hamming(len(self.heart_phase_buffer))
             breath_weights = np.hamming(len(self.breath_phase_buffer))
@@ -424,9 +424,9 @@ class VitalSignsManager:
                         self.last_heart_rate = heart_rate
                 else:
                     self.last_heart_rate = heart_rate
-                self.heart_rate_history.append(heart_rate)
-                if len(self.heart_rate_history) > self.HISTORY_SIZE:
-                    self.heart_rate_history.pop(0)
+                # Buffer circular para histórico de batimentos
+                self.heart_rate_history[self.heart_history_index] = heart_rate
+                self.heart_history_index = (self.heart_history_index + 1) % self.HISTORY_SIZE
             if breath_rate:
                 if self.last_breath_rate:
                     rate_change = abs(breath_rate - self.last_breath_rate) / self.last_breath_rate
@@ -436,9 +436,9 @@ class VitalSignsManager:
                         self.last_breath_rate = breath_rate
                 else:
                     self.last_breath_rate = breath_rate
-                self.breath_rate_history.append(breath_rate)
-                if len(self.breath_rate_history) > self.HISTORY_SIZE:
-                    self.breath_rate_history.pop(0)
+                # Buffer circular para histórico de respiração
+                self.breath_rate_history[self.breath_history_index] = breath_rate
+                self.breath_history_index = (self.breath_history_index + 1) % self.HISTORY_SIZE
             return heart_rate, breath_rate
         except Exception as e:
             logger.error(f"Erro ao calcular sinais vitais: {str(e)}")
@@ -449,24 +449,41 @@ class VitalSignsManager:
         try:
             if not phase_data:
                 return None
-            phase_mean = np.mean(phase_data)
-            centered_phase = np.array(phase_data) - phase_mean
+            
+            # Filtra dados válidos (remove zeros)
+            valid_data = [x for x in phase_data if x != 0.0]
+            if len(valid_data) < 3:  # Mínimo de dados para FFT
+                return None
+                
+            phase_mean = np.mean(valid_data)
+            centered_phase = np.array(valid_data) - phase_mean
+            
+            # Aplica janela de Hamming para melhorar FFT
             window = np.hanning(len(centered_phase))
             windowed_phase = centered_phase * window
+            
+            # FFT otimizada - só calcula se necessário
             fft_result = np.fft.fft(windowed_phase)
             fft_freq = np.fft.fftfreq(len(windowed_phase), d=1/self.SAMPLE_RATE)
+            
+            # Filtra frequências válidas
             valid_idx = np.where((fft_freq >= min_freq) & (fft_freq <= max_freq))[0]
             if len(valid_idx) == 0:
                 return None
+                
             magnitude_spectrum = np.abs(fft_result[valid_idx])
             peak_idx = np.argmax(magnitude_spectrum)
             dominant_freq = fft_freq[valid_idx[peak_idx]]
             peak_magnitude = magnitude_spectrum[peak_idx]
             avg_magnitude = np.mean(magnitude_spectrum)
+            
+            # Verifica se o pico é significativo
             if peak_magnitude < 1.5 * avg_magnitude:
                 return None
+                
             rate = abs(dominant_freq * rate_multiplier)
             return round(rate, 1)
+            
         except Exception as e:
             logger.error(f"Erro ao calcular taxa a partir da fase: {str(e)}")
             return None
@@ -500,10 +517,19 @@ class SerialRadarManager:
         self.MOVEMENT_THRESHOLD = 20.0
         self.session_positions = []
         
+        # Sistema de limpeza de memória
+        self.last_memory_cleanup = time.time()
+        self.MEMORY_CLEANUP_INTERVAL = 300  # 5 minutos
+        
         # Contadores para debug
         self.messages_received = 0
         self.messages_processed = 0
         self.messages_failed = 0
+        
+        # Sistema de retry para reconexões
+        self.consecutive_errors = 0
+        self.MAX_CONSECUTIVE_ERRORS = 5
+        self.last_error_time = 0
 
     def _generate_session_id(self):
         """Gera um novo ID de sessão"""
@@ -665,7 +691,7 @@ class SerialRadarManager:
         last_data_time = time.time()
         if not hasattr(self, 'last_valid_data_time'):
             self.last_valid_data_time = time.time()
-        self.RESET_TIMEOUT = 60  # 1 minuto
+        self.RESET_TIMEOUT = 300  # 5 minutos (mais tolerante com heartbeat)
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
         logger.info(f"🔍 [SERIAL] Aguardando dados da ESP32...")
 
@@ -688,19 +714,35 @@ class SerialRadarManager:
                 if data:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
-                    logger.info(f"[DEBUG] Texto bruto recebido da serial: {repr(text)}")
                     buffer += text
 
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip('\r')  # Remove \r também
-                        logger.info(f"[SERIAL] Linha recebida: {line}")
+                        
+                        # Detecta heartbeat do ESP32
+                        if 'HEARTBEAT: Sistema ativo' in line:
+                            logger.debug("💓 [SERIAL] Heartbeat recebido - ESP32 ativo")
+                            last_data_time = time.time()  # Atualiza timestamp de dados
+                            continue
+                        
+                        # Detecta se ESP32 entrou em modo download
+                        if 'waiting for download' in line or 'DOWNLOAD(' in line:
+                            logger.warning("⚠️ [SERIAL] ESP32 entrou em modo download! Aguardando reinicialização...")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            time.sleep(5)  # Aguarda 5 segundos para ESP32 reiniciar
+                            continue
+                        
+                        # Reduz logs excessivos - só loga quando detecta pessoa
                         if '-----Human Detected-----' in line:
+                            logger.debug(f"[SERIAL] Bloco de dados iniciado")
                             coletando_bloco = True
                             bloco_buffer = line + "\n"
                         elif coletando_bloco:
                             if line.strip() == "":
                                 # Linha em branco: fim do bloco!
+                                logger.debug(f"[SERIAL] Processando bloco de dados")
                                 self.process_radar_data(bloco_buffer)
                                 coletando_bloco = False
                                 bloco_buffer = ""
@@ -709,15 +751,73 @@ class SerialRadarManager:
 
                 current_time = time.time()
                 if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
-                    logger.warning("⚠️ Nenhum dado recebido por mais de 1 minuto. Executando reset automático da ESP32 via DTR/RTS...")
+                    logger.warning("⚠️ Nenhum dado ou heartbeat recebido por mais de 5 minutos. Executando reset automático da ESP32 via DTR/RTS...")
                     self.hardware_reset_esp32()
                     self.last_valid_data_time = current_time
 
-                if time.time() - last_data_time > 5:
-                    logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
+                # Limpeza periódica de memória
+                current_time = time.time()
+                if current_time - self.last_memory_cleanup > self.MEMORY_CLEANUP_INTERVAL:
+                    self._cleanup_memory()
+                    self.last_memory_cleanup = current_time
+                
+                if time.time() - last_data_time > 30:
+                    logger.warning("⚠️ Nenhum dado ou heartbeat recebido nos últimos 30 segundos")
                     last_data_time = time.time()
 
                 time.sleep(0.01)
+            except (OSError, IOError) as e:
+                error_msg = str(e).lower()
+                error_code = str(e)
+                current_time = time.time()
+                
+                # Incrementa contador de erros consecutivos
+                if current_time - self.last_error_time < 60:  # Erro nos últimos 60 segundos
+                    self.consecutive_errors += 1
+                else:
+                    self.consecutive_errors = 1  # Reset se passou muito tempo
+                
+                self.last_error_time = current_time
+                
+                # Trata diferentes tipos de erro de I/O
+                if ('device not configured' in error_msg or 'errno 6' in error_msg or 
+                    'input/output error' in error_msg or 'errno 5' in error_msg):
+                    
+                    logger.error(f"❌ [SERIAL] Erro de I/O detectado: {e} (Erro #{self.consecutive_errors})")
+                    
+                    # Se muitos erros consecutivos, aguarda mais tempo
+                    if self.consecutive_errors >= self.MAX_CONSECUTIVE_ERRORS:
+                        logger.warning(f"⚠️ [SERIAL] Muitos erros consecutivos ({self.consecutive_errors}), aguardando 30 segundos...")
+                        time.sleep(30)
+                        self.consecutive_errors = 0  # Reset contador
+                    else:
+                        logger.info("🔄 [SERIAL] Tentando reconectar automaticamente...")
+                        
+                        # Fecha conexão corrompida
+                        try:
+                            if self.serial_connection:
+                                self.serial_connection.close()
+                        except:
+                            pass
+                        
+                        # Aguarda um pouco antes de reconectar
+                        time.sleep(3)
+                        
+                        # Tenta reconectar
+                        if self.connect():
+                            logger.info("✅ [SERIAL] Reconexão bem-sucedida!")
+                            self.consecutive_errors = 0  # Reset contador de sucesso
+                        else:
+                            logger.error("❌ [SERIAL] Falha na reconexão, aguardando 15 segundos...")
+                            time.sleep(15)
+                    
+                    continue
+                else:
+                    # Outro tipo de erro de I/O
+                    logger.error(f"❌ [SERIAL] Erro de I/O desconhecido: {e}")
+                    time.sleep(2)
+                    continue
+                    
             except Exception as e:
                 logger.error(f"❌ Erro no loop de recepção: {str(e)}")
                 logger.error(traceback.format_exc())
@@ -756,6 +856,23 @@ class SerialRadarManager:
             logger.error(f"❌ [RESET] Erro ao resetar o radar: {str(e)}")
             logger.error(traceback.format_exc())
             return False
+
+    def _cleanup_memory(self):
+        """Limpeza periódica de memória para evitar vazamentos"""
+        try:
+            # Força coleta de lixo
+            import gc
+            gc.collect()
+            
+            # Limpa buffers antigos se necessário
+            if len(self.session_positions) > 10:
+                self.session_positions = self.session_positions[-10:]
+            
+            # Log de status de memória
+            logger.debug(f"[MEMORY] Limpeza executada - Sessões ativas: {len(self.session_positions)}")
+            
+        except Exception as e:
+            logger.error(f"[MEMORY] Erro na limpeza: {str(e)}")
 
     def _check_engagement(self, section_id, distance, move_speed):
         # Engajamento: basta a última leitura ser válida
@@ -835,14 +952,16 @@ class SerialRadarManager:
             self.last_activity_time = time.time()
             self.session_positions = []
         self.last_position = (x, y)
+        # Buffer circular para posições de sessão (máximo 10 posições)
+        if len(self.session_positions) >= 10:
+            self.session_positions.pop(0)  # Remove a posição mais antiga
+        
         self.session_positions.append({
             'x': x,
             'y': y,
             'speed': move_speed,
             'timestamp': time.time()
         })
-        if len(self.session_positions) > 10:
-            self.session_positions.pop(0)
         self._update_session()
         heart_rate = data.get('heart_rate')
         breath_rate = data.get('breath_rate')
