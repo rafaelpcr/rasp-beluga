@@ -12,10 +12,11 @@ import threading
 import re
 import math
 from dotenv import load_dotenv
+import json
 
 # Configuração básica de logging
 logging.basicConfig(
-    level=logging.INFO,  # Mudando para INFO para reduzir mensagens de debug
+    level=logging.INFO,  # Mudando para INFO para reduzir poluição do terminal
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('radar_serial.log'),
@@ -43,10 +44,31 @@ class GoogleSheetsManager:
             'https://www.googleapis.com/auth/drive',
             'https://www.googleapis.com/auth/drive.file'
         ]
-        self.creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
-        self.gc = gspread.authorize(self.creds)
-        self.spreadsheet = self.gc.open(spreadsheet_name)
-        self.worksheet = self.spreadsheet.worksheet(worksheet_name)
+        
+        try:
+            self.creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+        except Exception as e:
+            logger.error(f"❌ [GSHEETS_INIT] Erro ao carregar credenciais: {str(e)}")
+            raise
+        
+        try:
+            self.gc = gspread.authorize(self.creds)
+        except Exception as e:
+            logger.error(f"❌ [GSHEETS_INIT] Erro na autorização: {str(e)}")
+            raise
+        
+        try:
+            self.spreadsheet = self.gc.open(spreadsheet_name)
+        except Exception as e:
+            logger.error(f"❌ [GSHEETS_INIT] Erro ao abrir planilha: {str(e)}")
+            raise
+        
+        try:
+            self.worksheet = self.spreadsheet.worksheet(worksheet_name)
+            logger.info(f"✅ [GSHEETS_INIT] GoogleSheetsManager inicializado com sucesso!")
+        except Exception as e:
+            logger.error(f"❌ [GSHEETS_INIT] Erro ao acessar worksheet: {str(e)}")
+            raise
 
     def insert_radar_data(self, data):
         try:
@@ -65,16 +87,53 @@ class GoogleSheetsManager:
                 data.get('satisfaction_class'),
                 data.get('is_engaged')
             ]
+            
+            # Verificar se há valores None ou problemáticos
+            problematic_values = []
+            for i, value in enumerate(row):
+                if value is None:
+                    problematic_values.append(f"índice {i}: None")
+                elif isinstance(value, (int, float)) and (value != value):  # NaN check
+                    problematic_values.append(f"índice {i}: NaN")
+                elif isinstance(value, str) and len(value) > 1000:  # String muito longa
+                    problematic_values.append(f"índice {i}: string muito longa ({len(value)} chars)")
+            
+            if problematic_values:
+                logger.warning(f"⚠️ [GSHEETS] Valores problemáticos encontrados: {problematic_values}")
+            
             self.worksheet.append_row(row)
+            
             logger.info('✅ Dados enviados para o Google Sheets!')
             return True
+            
         except Exception as e:
-            logger.error(f'❌ Erro ao enviar dados para o Google Sheets: {str(e)}')
+            logger.error(f'❌ [GSHEETS] Erro ao enviar dados para o Google Sheets: {str(e)}')
+            logger.error(f'❌ [GSHEETS] Tipo do erro: {type(e)}')
+            logger.error(f'❌ [GSHEETS] Dados que causaram o erro: {data}')
+            
+            # Verificações específicas para erros comuns
+            error_msg = str(e).lower()
+            if 'quota' in error_msg or 'rate' in error_msg:
+                logger.error(f'❌ [GSHEETS] Erro de limite de taxa da API! Aguarde antes de tentar novamente.')
+                logger.error(f'❌ [GSHEETS] Considere adicionar delays entre as requisições.')
+            elif 'permission' in error_msg or 'forbidden' in error_msg:
+                logger.error(f'❌ [GSHEETS] Erro de permissão! Verifique as credenciais e permissões da planilha.')
+            elif 'not found' in error_msg:
+                logger.error(f'❌ [GSHEETS] Planilha ou worksheet não encontrada! Verifique o nome da planilha.')
+            elif 'authentication' in error_msg or 'auth' in error_msg:
+                logger.error(f'❌ [GSHEETS] Erro de autenticação! Verifique o arquivo de credenciais.')
+            else:
+                logger.error(f'❌ [GSHEETS] Erro desconhecido da API do Google Sheets.')
+            
             logger.error(traceback.format_exc())
             return False
 
 def parse_serial_data(raw_data):
     try:
+        # Verificação detalhada dos marcadores
+        has_human_detected = '-----Human Detected-----' in raw_data
+        has_target_1 = 'Target 1:' in raw_data
+        
         # Regex ainda mais tolerante: aceita espaços extras, quebras de linha e maiúsculas/minúsculas
         x_pattern = r'x_point\s*:\s*([-+]?\d*\.?\d+)'  # aceita inteiro ou float, sinal opcional
         y_pattern = r'y_point\s*:\s*([-+]?\d*\.?\d+)'
@@ -87,11 +146,13 @@ def parse_serial_data(raw_data):
         breath_rate_pattern = r'breath_rate\s*:\s*([-+]?\d*\.?\d+)'
         heart_rate_pattern = r'heart_rate\s*:\s*([-+]?\d*\.?\d+)'
         distance_pattern = r'distance\s*:\s*([-+]?\d*\.?\d+)'
+        
         # Usar flags re.IGNORECASE para aceitar maiúsculas/minúsculas
         if '-----Human Detected-----' not in raw_data:
             return None
         if 'Target 1:' not in raw_data:
             return None
+            
         x_match = re.search(x_pattern, raw_data, re.IGNORECASE)
         y_match = re.search(y_pattern, raw_data, re.IGNORECASE)
         dop_match = re.search(dop_pattern, raw_data, re.IGNORECASE)
@@ -103,6 +164,7 @@ def parse_serial_data(raw_data):
         breath_rate_match = re.search(breath_rate_pattern, raw_data, re.IGNORECASE)
         heart_rate_match = re.search(heart_rate_pattern, raw_data, re.IGNORECASE)
         distance_match = re.search(distance_pattern, raw_data, re.IGNORECASE)
+        
         if x_match and y_match:
             data = {
                 'x_point': float(x_match.group(1)),
@@ -117,12 +179,16 @@ def parse_serial_data(raw_data):
                 'heart_rate': float(heart_rate_match.group(1)) if heart_rate_match else None,
                 'distance': float(distance_match.group(1)) if distance_match else None
             }
+            
             if data['distance'] is None:
                 data['distance'] = math.sqrt(data['x_point']**2 + data['y_point']**2)
+            
             if data['heart_rate'] is None:
                 data['heart_rate'] = 75.0
+            
             if data['breath_rate'] is None:
                 data['breath_rate'] = 15.0
+            
             return data
         else:
             return None
@@ -172,44 +238,39 @@ class ShelfManager:
         self.sections = [
             {
                 'section_id': 1,
-                'section_name': 'Granolas Premium',
+                'section_name': 'Seção 1',
                 'product_id': '1',
-                'x_start': -1.0,
+                'x_start': 0.0,
                 'y_start': 0.0,
-                'x_end': -0.15,
+                'x_end': 0.5,
                 'y_end': 1.5
             },
             {
                 'section_id': 2,
-                'section_name': 'Mix de Frutas Secas',
+                'section_name': 'Seção 2',
                 'product_id': '2',
-                'x_start': -0.15,
+                'x_start': 0.5,
                 'y_start': 0.0,
-                'x_end': 0.15,
+                'x_end': 1.0,
                 'y_end': 1.5
             },
             {
                 'section_id': 3,
-                'section_name': 'Barras de Cereais',
+                'section_name': 'Seção 3',
                 'product_id': '3',
-                'x_start': 0.15,
+                'x_start': 1.0,
                 'y_start': 0.0,
-                'x_end': 1.0,
+                'x_end': 1.5,
                 'y_end': 1.5
             }
         ]
 
     def get_section_at_position(self, x, y, db_manager=None):
-        logger.debug(f"Coordenadas recebidas - X: {x:.2f}m, Y: {y:.2f}m")
         if x < -1.0 or x > 1.0 or y < 0 or y > 1.5:
-            logger.debug(f"⚠️ Coordenadas fora dos limites máximos")
             return None
         for section in self.sections:
-            logger.debug(f"Verificando seção {section['section_name']} - X: {section['x_start']:.2f} a {section['x_end']:.2f}m")
             if (section['x_start'] <= x <= section['x_end'] and section['y_start'] <= y <= section['y_end']):
-                logger.debug(f"✅ Seção encontrada: {section['section_name']}")
                 return section
-        logger.debug("❌ Nenhuma seção encontrada para as coordenadas fornecidas")
         return None
 
 shelf_manager = ShelfManager()
@@ -223,59 +284,49 @@ class AnalyticsManager:
 
     def calculate_satisfaction_score(self, move_speed, heart_rate, breath_rate, distance):
         try:
-            score = 0.0
-            if move_speed is not None:
-                if move_speed <= self.MOVEMENT_THRESHOLD:
-                    score += 30
-                else:
-                    score += max(0, 30 * (1 - move_speed/100))
-            if distance is not None:
-                if distance <= self.DISTANCE_THRESHOLD:
-                    score += 20
-                else:
-                    score += max(0, 20 * (1 - distance/5))
-            if heart_rate is not None:
-                if self.HEART_RATE_NORMAL[0] <= heart_rate <= self.HEART_RATE_NORMAL[1]:
-                    score += 25
-                else:
-                    deviation = min(
-                        abs(heart_rate - self.HEART_RATE_NORMAL[0]),
-                        abs(heart_rate - self.HEART_RATE_NORMAL[1])
-                    )
-                    score += max(0, 25 * (1 - deviation/50))
-            if breath_rate is not None:
-                if self.BREATH_RATE_NORMAL[0] <= breath_rate <= self.BREATH_RATE_NORMAL[1]:
-                    score += 25
-                else:
-                    deviation = min(
-                        abs(breath_rate - self.BREATH_RATE_NORMAL[0]),
-                        abs(breath_rate - self.BREATH_RATE_NORMAL[1])
-                    )
-                    score += max(0, 25 * (1 - deviation/20))
-            if score >= 85:
-                classification = "MUITO_POSITIVA"
-            elif score >= 70:
-                classification = "POSITIVA"
-            elif score >= 50:
-                classification = "NEUTRA"
-            elif score >= 30:
-                classification = "NEGATIVA"
+            # Considera NEUTRA se algum valor for None ou 0 (ausência de leitura)
+            if heart_rate is None or breath_rate is None or heart_rate == 0 or breath_rate == 0:
+                return (60.0, "NEUTRA")
+
+            # MUITO_POSITIVA
+            if (65 <= heart_rate <= 90 and 13 <= breath_rate <= 18 and move_speed < 6):
+                return (95.0, "MUITO_POSITIVA")
+            # POSITIVA
+            elif (60 <= heart_rate <= 100 and 12 <= breath_rate <= 20 and move_speed < 12):
+                return (80.0, "POSITIVA")
+            # NEUTRA
+            elif (55 <= heart_rate <= 110 and 10 <= breath_rate <= 22 and move_speed < 25):
+                return (60.0, "NEUTRA")
+            # NEGATIVA
             else:
-                classification = "MUITO_NEGATIVA"
-            return (score, classification)
+                return (20.0, "NEGATIVA")
         except Exception as e:
             logger.error(f"Erro ao calcular satisfação: {str(e)}")
-            return (50.0, "NEUTRA")
+            return (60.0, "NEUTRA")
 
 class VitalSignsManager:
     def __init__(self):
         self.SAMPLE_RATE = 20
-        self.heart_phase_buffer = []
-        self.breath_phase_buffer = []
-        self.quality_buffer = []
+        # Inicializa buffers com tamanho máximo para evitar crescimento indefinido
         self.HEART_BUFFER_SIZE = 20
         self.BREATH_BUFFER_SIZE = 30
         self.QUALITY_BUFFER_SIZE = 10
+        self.HISTORY_SIZE = 10
+        
+        # Inicializa buffers com tamanho máximo
+        self.heart_phase_buffer = [0.0] * self.HEART_BUFFER_SIZE
+        self.breath_phase_buffer = [0.0] * self.BREATH_BUFFER_SIZE
+        self.quality_buffer = [0.0] * self.QUALITY_BUFFER_SIZE
+        self.heart_rate_history = [0.0] * self.HISTORY_SIZE
+        self.breath_rate_history = [0.0] * self.HISTORY_SIZE
+        
+        # Contadores para controle de buffer circular
+        self.heart_buffer_index = 0
+        self.breath_buffer_index = 0
+        self.quality_buffer_index = 0
+        self.heart_history_index = 0
+        self.breath_history_index = 0
+        
         self.last_heart_rate = None
         self.last_breath_rate = None
         self.last_quality_score = 0
@@ -285,9 +336,6 @@ class VitalSignsManager:
             'heart_rate': (40, 140),
             'breath_rate': (8, 25)
         }
-        self.heart_rate_history = []
-        self.breath_rate_history = []
-        self.HISTORY_SIZE = 10
 
     def calculate_signal_quality(self, phase_data, distance):
         try:
@@ -318,9 +366,9 @@ class VitalSignsManager:
                            variance_score * 0.4 +
                            amplitude_score * 0.3)
                            
-            self.quality_buffer.append(quality_score)
-            if len(self.quality_buffer) > self.QUALITY_BUFFER_SIZE:
-                self.quality_buffer.pop(0)
+            # Buffer circular para qualidade
+            self.quality_buffer[self.quality_buffer_index] = quality_score
+            self.quality_buffer_index = (self.quality_buffer_index + 1) % self.QUALITY_BUFFER_SIZE
                 
             self.last_quality_score = np.mean(self.quality_buffer)
             return self.last_quality_score
@@ -338,18 +386,18 @@ class VitalSignsManager:
                 breath_phase = [breath_phase]
                 
             quality_score = self.calculate_signal_quality(heart_phase, distance)
-            logger.debug(f"Qualidade do sinal: {quality_score:.2f}")
             if quality_score < self.MIN_QUALITY_SCORE:
-                logger.debug(f"⚠️ Qualidade do sinal muito baixa: {quality_score:.2f}")
                 return None, None
-            self.heart_phase_buffer.append(heart_phase)
-            self.breath_phase_buffer.append(breath_phase)
-            while len(self.heart_phase_buffer) > self.HEART_BUFFER_SIZE:
-                self.heart_phase_buffer.pop(0)
-            while len(self.breath_phase_buffer) > self.BREATH_BUFFER_SIZE:
-                self.breath_phase_buffer.pop(0)
-            if len(self.heart_phase_buffer) < self.HEART_BUFFER_SIZE * 0.7:
-                logger.debug(f"⏳ Aguardando mais dados ({len(self.heart_phase_buffer)}/{self.HEART_BUFFER_SIZE})")
+            # Buffer circular para fases
+            self.heart_phase_buffer[self.heart_buffer_index] = heart_phase
+            self.breath_phase_buffer[self.breath_buffer_index] = breath_phase
+            
+            self.heart_buffer_index = (self.heart_buffer_index + 1) % self.HEART_BUFFER_SIZE
+            self.breath_buffer_index = (self.breath_buffer_index + 1) % self.BREATH_BUFFER_SIZE
+            
+            # Verifica se temos dados suficientes (70% do buffer preenchido)
+            heart_data_count = min(self.heart_buffer_index, self.HEART_BUFFER_SIZE)
+            if heart_data_count < self.HEART_BUFFER_SIZE * 0.7:
                 return None, None
             heart_weights = np.hamming(len(self.heart_phase_buffer))
             breath_weights = np.hamming(len(self.breath_phase_buffer))
@@ -371,30 +419,26 @@ class VitalSignsManager:
                 if self.last_heart_rate:
                     rate_change = abs(heart_rate - self.last_heart_rate) / self.last_heart_rate
                     if rate_change > self.STABILITY_THRESHOLD:
-                        logger.debug(f"⚠️ Mudança brusca nos batimentos: {rate_change:.2f}")
                         heart_rate = (heart_rate + self.last_heart_rate) / 2
                     else:
                         self.last_heart_rate = heart_rate
                 else:
                     self.last_heart_rate = heart_rate
-                self.heart_rate_history.append(heart_rate)
-                if len(self.heart_rate_history) > self.HISTORY_SIZE:
-                    self.heart_rate_history.pop(0)
+                # Buffer circular para histórico de batimentos
+                self.heart_rate_history[self.heart_history_index] = heart_rate
+                self.heart_history_index = (self.heart_history_index + 1) % self.HISTORY_SIZE
             if breath_rate:
                 if self.last_breath_rate:
                     rate_change = abs(breath_rate - self.last_breath_rate) / self.last_breath_rate
                     if rate_change > self.STABILITY_THRESHOLD:
-                        logger.debug(f"⚠️ Mudança brusca na respiração: {rate_change:.2f}")
                         breath_rate = None
                     else:
                         self.last_breath_rate = breath_rate
                 else:
                     self.last_breath_rate = breath_rate
-                self.breath_rate_history.append(breath_rate)
-                if len(self.breath_rate_history) > self.HISTORY_SIZE:
-                    self.breath_rate_history.pop(0)
-            if heart_rate and breath_rate:
-                logger.debug(f"✅ Medição válida - HR: {heart_rate:.1f} bpm, BR: {breath_rate:.1f} rpm")
+                # Buffer circular para histórico de respiração
+                self.breath_rate_history[self.breath_history_index] = breath_rate
+                self.breath_history_index = (self.breath_history_index + 1) % self.HISTORY_SIZE
             return heart_rate, breath_rate
         except Exception as e:
             logger.error(f"Erro ao calcular sinais vitais: {str(e)}")
@@ -405,28 +449,46 @@ class VitalSignsManager:
         try:
             if not phase_data:
                 return None
-            phase_mean = np.mean(phase_data)
-            centered_phase = np.array(phase_data) - phase_mean
+            
+            # Filtra dados válidos (remove zeros)
+            valid_data = [x for x in phase_data if x != 0.0]
+            if len(valid_data) < 3:  # Mínimo de dados para FFT
+                return None
+                
+            phase_mean = np.mean(valid_data)
+            centered_phase = np.array(valid_data) - phase_mean
+            
+            # Aplica janela de Hamming para melhorar FFT
             window = np.hanning(len(centered_phase))
             windowed_phase = centered_phase * window
+            
+            # FFT otimizada - só calcula se necessário
             fft_result = np.fft.fft(windowed_phase)
             fft_freq = np.fft.fftfreq(len(windowed_phase), d=1/self.SAMPLE_RATE)
+            
+            # Filtra frequências válidas
             valid_idx = np.where((fft_freq >= min_freq) & (fft_freq <= max_freq))[0]
             if len(valid_idx) == 0:
                 return None
+                
             magnitude_spectrum = np.abs(fft_result[valid_idx])
             peak_idx = np.argmax(magnitude_spectrum)
             dominant_freq = fft_freq[valid_idx[peak_idx]]
             peak_magnitude = magnitude_spectrum[peak_idx]
             avg_magnitude = np.mean(magnitude_spectrum)
+            
+            # Verifica se o pico é significativo
             if peak_magnitude < 1.5 * avg_magnitude:
                 return None
+                
             rate = abs(dominant_freq * rate_multiplier)
             return round(rate, 1)
+            
         except Exception as e:
             logger.error(f"Erro ao calcular taxa a partir da fase: {str(e)}")
             return None
 
+# Remover importação da EmotionalStateAnalyzer e campos emocionais
 class SerialRadarManager:
     def __init__(self, port=None, baudrate=115200):
         self.port = port or SERIAL_CONFIG['port']
@@ -437,15 +499,37 @@ class SerialRadarManager:
         self.db_manager = None
         self.analytics_manager = AnalyticsManager()
         self.vital_signs_manager = VitalSignsManager()
+        # self.emotional_analyzer = EmotionalStateAnalyzer()  # Removido
         self.current_session_id = None
         self.last_activity_time = None
-        self.SESSION_TIMEOUT = 300  # 5 minutos em segundos
+        self.SESSION_TIMEOUT = 60  # 1 minuto para identificar novas pessoas
+        self.last_valid_data_time = time.time()  # Timestamp do último dado válido
+        self.RESET_TIMEOUT = 60  # 1 minuto
         # Buffer para engajamento
         self.engagement_buffer = []
-        self.ENGAGEMENT_WINDOW = 1  # Alterado para 1 leitura (5 segundos)
-        self.ENGAGEMENT_DISTANCE = 1.0  # metros
-        self.ENGAGEMENT_SPEED = 10.0  # cm/s
-        self.ENGAGEMENT_MIN_COUNT = 1  # Alterado para 1 leitura (5 segundos)
+        self.ENGAGEMENT_WINDOW = 1
+        self.ENGAGEMENT_DISTANCE = 1.0
+        self.ENGAGEMENT_SPEED = 10.0
+        self.ENGAGEMENT_MIN_COUNT = 1
+        # Parâmetros para detecção de pessoas
+        self.last_position = None
+        self.POSITION_THRESHOLD = 0.5
+        self.MOVEMENT_THRESHOLD = 20.0
+        self.session_positions = []
+        
+        # Sistema de limpeza de memória
+        self.last_memory_cleanup = time.time()
+        self.MEMORY_CLEANUP_INTERVAL = 300  # 5 minutos
+        
+        # Contadores para debug
+        self.messages_received = 0
+        self.messages_processed = 0
+        self.messages_failed = 0
+        
+        # Sistema de retry para reconexões
+        self.consecutive_errors = 0
+        self.MAX_CONSECUTIVE_ERRORS = 5
+        self.last_error_time = 0
 
     def _generate_session_id(self):
         """Gera um novo ID de sessão"""
@@ -457,17 +541,43 @@ class SerialRadarManager:
             logger.debug("Sessão expirada, gerando nova sessão")
             self.current_session_id = self._generate_session_id()
             self.last_activity_time = time.time()
+            self.session_positions = []  # Limpa histórico de posições
             return True
+        return False
+
+    def _is_new_person(self, x, y, move_speed):
+        """Verifica se os dados indicam uma nova pessoa"""
+        if not self.last_position:
+            return True
+
+        last_x, last_y = self.last_position
+        distance = math.sqrt((x - last_x)**2 + (y - last_y)**2)
+        
+        # Se a distância for muito grande ou a velocidade for muito alta, provavelmente é uma nova pessoa
+        if distance > self.POSITION_THRESHOLD or move_speed > self.MOVEMENT_THRESHOLD:
+            return True
+            
+        # Verifica se o movimento é consistente com a última posição
+        if len(self.session_positions) >= 2:
+            last_positions = self.session_positions[-2:]
+            avg_speed = sum(p['speed'] for p in last_positions) / len(last_positions)
+            if abs(move_speed - avg_speed) > self.MOVEMENT_THRESHOLD:
+                return True
+                
         return False
 
     def _update_session(self):
         """Atualiza ou cria uma nova sessão"""
+        current_time = time.time()
+        
+        # Verifica timeout da sessão
         if not self.current_session_id or self._check_session_timeout():
             self.current_session_id = self._generate_session_id()
-            self.last_activity_time = time.time()
+            self.last_activity_time = current_time
+            self.session_positions = []  # Limpa histórico de posições
             logger.debug(f"Nova sessão iniciada: {self.current_session_id}")
         else:
-            self.last_activity_time = time.time()
+            self.last_activity_time = current_time
 
     def find_serial_port(self):
         import serial.tools.list_ports
@@ -485,11 +595,21 @@ class SerialRadarManager:
         return ports[0].device
 
     def connect(self):
-        if not self.port:
-            logger.error("Porta serial não especificada!")
-            return False
+        # Se a porta não existir mais, tenta detectar automaticamente
+        if not self.port or not os.path.exists(self.port):
+            logger.warning(f"⚠️ Porta serial {self.port} não encontrada. Tentando detectar automaticamente...")
+            
+            detected_port = self.find_serial_port()
+            if detected_port:
+                self.port = detected_port
+                logger.info(f"✅ Porta serial detectada automaticamente: {self.port}")
+            else:
+                logger.error("❌ Nenhuma porta serial disponível para conexão!")
+                return False
+        
         try:
-            logger.info(f"Conectando à porta serial {self.port} (baudrate: {self.baudrate})...")
+            logger.info(f"🔄 Conectando à porta serial {self.port} (baudrate: {self.baudrate})...")
+            
             self.serial_connection = serial.Serial(
                 port=self.port,
                 baudrate=self.baudrate,
@@ -499,43 +619,136 @@ class SerialRadarManager:
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE
             )
+            
             time.sleep(2)
+            
             logger.info(f"✅ Conexão serial estabelecida com sucesso!")
             return True
+            
         except Exception as e:
             logger.error(f"❌ Erro ao conectar à porta serial: {str(e)}")
             logger.error(traceback.format_exc())
             return False
 
     def start(self, db_manager):
+        """Inicia o sistema de radar"""
         self.db_manager = db_manager
-        if not self.connect():
-            return False
         self.is_running = True
-        self.receive_thread = threading.Thread(target=self.receive_data_loop)
-        self.receive_thread.daemon = True
-        self.receive_thread.start()
-        logger.info("Receptor de dados seriais iniciado!")
-        return True
+        
+        try:
+            # Conecta ao radar
+            if not self.connect():
+                logger.error("❌ [START] Falha ao conectar com o radar")
+                return False
+            
+            logger.info("✅ [START] Conectado ao radar com sucesso!")
+            
+            # === CONFIGURAÇÃO INICIAL DO SENSOR ===
+            logger.info("🔧 [START] Configurando sensor para modo contínuo...")
+            self.configure_sensor_continuous_mode()
+            
+            # Aguarda sensor estabilizar
+            logger.info("⏳ [START] Aguardando sensor estabilizar...")
+            time.sleep(3)
+            
+            # Inicia thread de recepção
+            self.receive_thread = threading.Thread(target=self.receive_data_loop, daemon=True)
+            self.receive_thread.start()
+            
+            # Inicia thread de keep-alive
+            self.keep_alive_thread = threading.Thread(target=self._keep_alive_loop, daemon=True)
+            self.keep_alive_thread.start()
+            
+            logger.info("✅ [START] Sistema de radar iniciado com sucesso!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ [START] Erro ao iniciar sistema: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def _keep_alive_loop(self):
+        """Loop para enviar keep-alive periódico"""
+        last_keep_alive = time.time()
+        keep_alive_interval = 30  # 30 segundos
+        
+        logger.info("💓 [KEEP_ALIVE] Thread de keep-alive iniciada")
+        
+        while self.is_running:
+            try:
+                current_time = time.time()
+                
+                if current_time - last_keep_alive > keep_alive_interval:
+                    self.send_keep_alive()
+                    last_keep_alive = current_time
+                
+                time.sleep(5)  # Verifica a cada 5 segundos
+                
+            except Exception as e:
+                logger.error(f"❌ [KEEP_ALIVE] Erro no loop de keep-alive: {str(e)}")
+                time.sleep(10)  # Aguarda mais tempo em caso de erro
+        
+        logger.info("💓 [KEEP_ALIVE] Thread de keep-alive encerrada")
 
     def stop(self):
+        """Para o sistema de radar"""
         self.is_running = False
-        if self.serial_connection:
-            try:
-                self.serial_connection.close()
-            except:
-                pass
-        if self.receive_thread and self.receive_thread.is_alive():
+        
+        # Para threads
+        if hasattr(self, 'receive_thread') and self.receive_thread and self.receive_thread.is_alive():
             self.receive_thread.join(timeout=2)
-        logger.info("Receptor de dados seriais parado!")
+        
+        if hasattr(self, 'keep_alive_thread') and self.keep_alive_thread and self.keep_alive_thread.is_alive():
+            self.keep_alive_thread.join(timeout=2)
+        
+        # Fecha conexão serial
+        if self.serial_connection and self.serial_connection.is_open:
+            self.serial_connection.close()
+        
+        logger.info("✅ [STOP] Sistema de radar parado!")
+
+    def hardware_reset_esp32(self):
+        """
+        Reinicia a ESP32 via pulso nas linhas DTR/RTS da porta serial.
+        Não interfere na conexão principal do radar.
+        """
+        try:
+            logger.warning("[ESP32 RESET] Iniciando reset via DTR/RTS na porta serial...")
+            # Fecha a conexão principal se estiver aberta
+            was_open = False
+            if self.serial_connection and self.serial_connection.is_open:
+                self.serial_connection.close()
+                was_open = True
+            # Abre uma conexão temporária só para reset
+            with serial.Serial(self.port, self.baudrate, timeout=1) as ser:
+                ser.setDTR(False)
+                ser.setRTS(True)
+                time.sleep(0.1)
+                ser.setDTR(True)
+                ser.setRTS(False)
+                time.sleep(0.1)
+            logger.info("[ESP32 RESET] Pulso de reset enviado com sucesso!")
+            # Reabre a conexão principal se estava aberta
+            if was_open:
+                self.connect()
+            return True
+        except Exception as e:
+            logger.error(f"[ESP32 RESET] Falha ao resetar ESP32: {e}")
+            logger.error(traceback.format_exc())
+            return False
 
     def receive_data_loop(self):
         buffer = ""
-        message_mode = False
-        message_buffer = ""
-        target_data_complete = False
         last_data_time = time.time()
+        if not hasattr(self, 'last_valid_data_time'):
+            self.last_valid_data_time = time.time()
+        self.RESET_TIMEOUT = 300  # 5 minutos (mais tolerante com heartbeat)
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
+        logger.info(f"🔍 [SERIAL] Aguardando dados da ESP32...")
+
+        bloco_buffer = ""
+        coletando_bloco = False
+
         while self.is_running:
             try:
                 if not self.serial_connection.is_open:
@@ -543,75 +756,446 @@ class SerialRadarManager:
                     self.connect()
                     time.sleep(1)
                     continue
+
                 in_waiting = self.serial_connection.in_waiting
                 if in_waiting is None:
                     in_waiting = 0
+
                 data = self.serial_connection.read(in_waiting or 1)
                 if data:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
-                    logger.debug(f"Dados recebidos: {text}")  # Log dos dados brutos
                     buffer += text
-                    if '\n' in buffer:
-                        lines = buffer.split('\n')
-                        buffer = lines[-1]
-                        for line in lines[:-1]:
-                            line = line.strip()
-                            logger.debug(f"Processando linha: {line}")  # Log de cada linha
-                            if '-----Human Detected-----' in line:
-                                if not message_mode:
-                                    message_mode = True
-                                    message_buffer = line + '\n'
-                                    target_data_complete = False
-                            elif message_mode:
-                                message_buffer += line + '\n'
-                                if 'move_speed:' in line:
-                                    target_data_complete = True
-                                    logger.debug(f"Mensagem completa recebida:\n{message_buffer}")  # Log da mensagem completa
-                                    self.process_radar_data(message_buffer)
-                                    message_mode = False
-                                    message_buffer = ""
-                                    target_data_complete = False
-                if time.time() - last_data_time > 5:
-                    logger.warning("⚠️ Nenhum dado recebido nos últimos 5 segundos")
+
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip('\r')  # Remove \r também
+                        
+                        # === NOVOS COMANDOS E STATUS DO ARDUINO ===
+                        
+                        # Detecta heartbeat do ESP32
+                        if 'HEARTBEAT: Sistema ativo' in line:
+                            logger.debug("💓 [SERIAL] Heartbeat recebido - ESP32 ativo")
+                            last_data_time = time.time()  # Atualiza timestamp de dados
+                            self.last_valid_data_time = time.time()
+                            continue
+                        
+                        # Detecta deep sleep horário
+                        if '=== DEEP SLEEP HORÁRIO ===' in line:
+                            logger.info("😴 [SERIAL] ESP32 entrando em deep sleep horário (1 minuto)")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            continue
+                        
+                        # Detecta saída do deep sleep
+                        if 'Acordou do deep sleep horário' in line or 'Voltando ao modo de operação normal' in line:
+                            logger.info("🌅 [SERIAL] ESP32 saiu do deep sleep - voltando ao normal")
+                            continue
+                        
+                        # Detecta reset do sistema
+                        if '=== RESETANDO SISTEMA COMPLETO ===' in line:
+                            logger.info("🔄 [SERIAL] ESP32 executando reset completo do sistema")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            continue
+                        
+                        # Detecta reinicialização do sensor
+                        if '=== REINICIALIZANDO SENSOR ===' in line or 'Sensor MR60BHA2 reinicializado' in line:
+                            logger.info("🔧 [SERIAL] ESP32 reinicializando sensor MR60BHA2")
+                            continue
+                        
+                        # Detecta diagnósticos do sistema
+                        if '=== DIAGNÓSTICO COMPLETO DO SISTEMA ===' in line:
+                            logger.info("🔍 [SERIAL] ESP32 executando diagnóstico completo")
+                            continue
+                        
+                        # Detecta problemas de memória
+                        if 'ALERTA: Memória baixa!' in line or 'Fragmentação crítica detectada' in line:
+                            logger.warning("⚠️ [SERIAL] ESP32 detectou problemas de memória")
+                            continue
+                        
+                        # Detecta problemas de comunicação
+                        if 'ALERTA: Conexão instável detectada!' in line:
+                            logger.warning("⚠️ [SERIAL] ESP32 detectou problemas de comunicação")
+                            continue
+                        
+                        # Detecta ativação do sensor
+                        if 'Sensor ativado e funcionando!' in line:
+                            logger.info("✅ [SERIAL] Sensor MR60BHA2 ativado com sucesso")
+                            continue
+                        
+                        # Detecta modo inativo do sensor
+                        if 'Sensor em modo inativo' in line:
+                            logger.warning("😴 [SERIAL] Sensor MR60BHA2 em modo inativo - aguardando ativação")
+                            continue
+                        
+                        # Detecta dados simulados (para demonstração)
+                        if 'DADOS SIMULADOS' in line:
+                            logger.debug("🎭 [SERIAL] ESP32 usando dados simulados para demonstração")
+                            continue
+                        
+                        # Detecta se ESP32 entrou em modo download
+                        if 'waiting for download' in line or 'DOWNLOAD(' in line:
+                            logger.warning("⚠️ [SERIAL] ESP32 entrou em modo download! Aguardando reinicialização...")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            time.sleep(5)  # Aguarda 5 segundos para ESP32 reiniciar
+                            continue
+                        
+                        # Detecta estatísticas do sistema
+                        if 'Loop ativo - Total:' in line:
+                            logger.debug(f"📊 [SERIAL] {line.strip()}")
+                            continue
+                        
+                        # Detecta status de deep sleep
+                        if 'Próximo deep sleep em:' in line:
+                            logger.debug(f"⏰ [SERIAL] {line.strip()}")
+                            continue
+                        
+                        # Reduz logs excessivos - só loga quando detecta pessoa
+                        if '-----Human Detected-----' in line:
+                            logger.debug(f"[SERIAL] Bloco de dados iniciado")
+                            coletando_bloco = True
+                            bloco_buffer = line + "\n"
+                        elif coletando_bloco:
+                            if line.strip() == "":
+                                # Linha em branco: fim do bloco!
+                                logger.debug(f"[SERIAL] Processando bloco de dados")
+                                self.process_radar_data(bloco_buffer)
+                                coletando_bloco = False
+                                bloco_buffer = ""
+                                self.last_valid_data_time = time.time()  # Atualiza quando processa dados
+                            else:
+                                bloco_buffer += line + "\n"
+
+                current_time = time.time()
+                if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
+                    logger.warning("⚠️ Nenhum dado ou heartbeat recebido por mais de 5 minutos. Executando reset automático da ESP32 via DTR/RTS...")
+                    self.hardware_reset_esp32()
+                    self.last_valid_data_time = current_time
+
+                # Limpeza periódica de memória
+                current_time = time.time()
+                if current_time - self.last_memory_cleanup > self.MEMORY_CLEANUP_INTERVAL:
+                    self._cleanup_memory()
+                    self.last_memory_cleanup = current_time
+                
+                if time.time() - last_data_time > 30:
+                    logger.warning("⚠️ Nenhum dado ou heartbeat recebido nos últimos 30 segundos")
                     last_data_time = time.time()
+
                 time.sleep(0.01)
+            except (OSError, IOError) as e:
+                error_msg = str(e).lower()
+                error_code = str(e)
+                current_time = time.time()
+                
+                # Incrementa contador de erros consecutivos
+                if current_time - self.last_error_time < 60:  # Erro nos últimos 60 segundos
+                    self.consecutive_errors += 1
+                else:
+                    self.consecutive_errors = 1  # Reset se passou muito tempo
+                
+                self.last_error_time = current_time
+                
+                # Trata diferentes tipos de erro de I/O
+                if ('device not configured' in error_msg or 'errno 6' in error_msg or 
+                    'input/output error' in error_msg or 'errno 5' in error_msg):
+                    
+                    logger.error(f"❌ [SERIAL] Erro de I/O detectado: {e} (Erro #{self.consecutive_errors})")
+                    
+                    # Se muitos erros consecutivos, aguarda mais tempo
+                    if self.consecutive_errors >= self.MAX_CONSECUTIVE_ERRORS:
+                        logger.warning(f"⚠️ [SERIAL] Muitos erros consecutivos ({self.consecutive_errors}), aguardando 30 segundos...")
+                        time.sleep(30)
+                        self.consecutive_errors = 0  # Reset contador
+                    else:
+                        logger.info("🔄 [SERIAL] Tentando reconectar automaticamente...")
+                        
+                        # Fecha conexão corrompida
+                        try:
+                            if self.serial_connection:
+                                self.serial_connection.close()
+                        except:
+                            pass
+                        
+                        # Tenta reconectar
+                        time.sleep(2)
+                        try:
+                            self.connect()
+                        except Exception as reconnect_error:
+                            logger.error(f"❌ [SERIAL] Falha na reconexão: {reconnect_error}")
+                            time.sleep(5)  # Aguarda mais tempo antes da próxima tentativa
+                else:
+                    logger.error(f"❌ [SERIAL] Erro desconhecido: {e}")
+                    time.sleep(1)
             except Exception as e:
-                logger.error(f"❌ Erro no loop de recepção: {str(e)}")
+                logger.error(f"❌ [SERIAL] Erro geral no loop: {str(e)}")
                 logger.error(traceback.format_exc())
                 time.sleep(1)
 
+    def reset_radar(self):
+        """Executa um reset no radar - adaptado para o novo código Arduino"""
+        try:
+            logger.warning("🔄 [RESET] Iniciando reset do radar por inatividade de dados...")
+            
+            # Desconecta o radar
+            if self.serial_connection and self.serial_connection.is_open:
+                logger.info("[RESET] Fechando conexão serial antes do reset...")
+                self.serial_connection.close()
+                time.sleep(1)  # Aguarda 1 segundo
+            else:
+                logger.info("[RESET] Conexão serial já estava fechada.")
+            
+            # Reconecta o radar
+            logger.info(f"[RESET] Reabrindo conexão serial na porta {self.port}...")
+            self.serial_connection = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                timeout=1,
+                write_timeout=1,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE
+            )
+            logger.info("[RESET] Conexão serial reestabelecida.")
+            
+            # === NOVOS COMANDOS DE RESET DO ARDUINO ===
+            
+            # 1. Tenta comando Tiny Frame (protocolo do MR60BHA2)
+            logger.info("[RESET] Enviando comando de reset via Tiny Frame...")
+            reset_frame = bytes([0x02, 0x01, 0x01, 0x00, 0x04])  # Frame de reset
+            self.serial_connection.write(reset_frame)
+            time.sleep(1)
+            
+            # 2. Tenta comando ASCII
+            logger.info("[RESET] Enviando comando de reset ASCII...")
+            self.serial_connection.write(b'RESET\n')
+            time.sleep(1)
+            self.serial_connection.write(b'RST\n')
+            time.sleep(1)
+            
+            # 3. Aguarda resposta do radar
+            logger.info("[RESET] Aguardando resposta do radar...")
+            time.sleep(3)  # Aguarda radar processar comandos
+            
+            # 4. Verifica se há resposta
+            if self.serial_connection.in_waiting > 0:
+                response = self.serial_connection.read(self.serial_connection.in_waiting)
+                logger.info(f"[RESET] Resposta recebida: {response}")
+            
+            logger.info("✅ [RESET] Reset do radar concluído com sucesso!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ [RESET] Erro ao resetar o radar: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def send_keep_alive(self):
+        """Envia comando keep-alive para manter sensor ativo"""
+        try:
+            if self.serial_connection and self.serial_connection.is_open:
+                # Comando keep-alive via Tiny Frame
+                keep_alive_frame = bytes([0x02, 0x01, 0x05, 0x01, 0x09])
+                self.serial_connection.write(keep_alive_frame)
+                
+                # Comando keep-alive ASCII
+                self.serial_connection.write(b'KEEP_ALIVE\n')
+                
+                logger.debug("💓 [KEEP_ALIVE] Comando enviado para manter sensor ativo")
+                return True
+        except Exception as e:
+            logger.error(f"❌ [KEEP_ALIVE] Erro ao enviar keep-alive: {str(e)}")
+            return False
+
+    def configure_sensor_continuous_mode(self):
+        """Configura sensor para modo contínuo"""
+        try:
+            if self.serial_connection and self.serial_connection.is_open:
+                logger.info("[CONFIG] Configurando sensor para modo contínuo...")
+                
+                # Comandos para modo contínuo via Tiny Frame
+                continuous_mode_frame = bytes([0x02, 0x01, 0x02, 0x01, 0x06])
+                self.serial_connection.write(continuous_mode_frame)
+                time.sleep(0.5)
+                
+                # Comando para desabilitar sleep
+                sleep_disable_frame = bytes([0x02, 0x01, 0x03, 0x00, 0x06])
+                self.serial_connection.write(sleep_disable_frame)
+                time.sleep(0.5)
+                
+                # Comando para modo sempre ativo
+                always_on_frame = bytes([0x02, 0x01, 0x04, 0x01, 0x08])
+                self.serial_connection.write(always_on_frame)
+                time.sleep(0.5)
+                
+                # Comandos ASCII para modo contínuo
+                ascii_commands = [
+                    "CONTINUOUS_MODE=1",
+                    "SLEEP_MODE=0", 
+                    "ALWAYS_ON=1",
+                    "TIMEOUT=0",
+                    "CONTINUOUS_DETECTION=1"
+                ]
+                
+                for cmd in ascii_commands:
+                    self.serial_connection.write(f"{cmd}\n".encode())
+                    time.sleep(0.2)
+                
+                logger.info("✅ [CONFIG] Sensor configurado para modo contínuo")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ [CONFIG] Erro ao configurar sensor: {str(e)}")
+            return False
+
+    def _cleanup_memory(self):
+        """Limpeza periódica de memória para evitar vazamentos"""
+        try:
+            # Força coleta de lixo
+            import gc
+            gc.collect()
+            
+            # Limpa buffers antigos se necessário
+            if len(self.session_positions) > 10:
+                self.session_positions = self.session_positions[-10:]
+            
+            # Log de status de memória
+            logger.debug(f"[MEMORY] Limpeza executada - Sessões ativas: {len(self.session_positions)}")
+            
+        except Exception as e:
+            logger.error(f"[MEMORY] Erro na limpeza: {str(e)}")
+
     def _check_engagement(self, section_id, distance, move_speed):
-        # Adiciona leitura ao buffer
-        self.engagement_buffer.append({
-            'section_id': section_id,
-            'distance': distance,
-            'move_speed': move_speed,
-            'timestamp': time.time()
-        })
-        # Mantém o buffer no tamanho da janela
-        if len(self.engagement_buffer) > self.ENGAGEMENT_WINDOW:
-            self.engagement_buffer.pop(0)
-        # Filtra leituras válidas
-        valid = [e for e in self.engagement_buffer if e['section_id'] == section_id and e['distance'] <= self.ENGAGEMENT_DISTANCE and e['move_speed'] <= self.ENGAGEMENT_SPEED]
-        # Engajamento se houver pelo menos ENGAGEMENT_MIN_COUNT leituras consecutivas válidas
-        if len(valid) >= self.ENGAGEMENT_MIN_COUNT:
+        # Engajamento: basta a última leitura ser válida
+        if section_id is not None and distance <= self.ENGAGEMENT_DISTANCE and move_speed <= self.ENGAGEMENT_SPEED:
             return True
         return False
 
     def process_radar_data(self, raw_data):
-        data = parse_serial_data(raw_data)
-        if not data:
-            return
-
-        # Atualiza a sessão
+        # Novo parser para o formato melhorado do Arduino
+        def parse_radar_text_block(text):
+            lines = text.strip().split('\n')
+            data = {}
+            
+            # Novo formato: dados simples com chave: valor
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    key = key.strip().lower().replace(' ', '_')
+                    value = value.strip().replace(' cm/s', '')
+                    
+                    try:
+                        data[key] = float(value)
+                    except ValueError:
+                        try:
+                            data[key] = int(value)
+                        except ValueError:
+                            data[key] = value
+            
+            # Mapeia os novos nomes de campos
+            return {
+                'x_point': data.get('x_position', data.get('x_point', 0)),
+                'y_point': data.get('y_position', data.get('y_point', 0)),
+                'move_speed': data.get('move_speed', 0),
+                'heart_rate': data.get('heart_rate', None),
+                'breath_rate': data.get('breath_rate', None),
+                'distance': data.get('distance', 0),
+                'dop_index': data.get('dop_index', 0),
+                'total_phase': data.get('total_phase', 0),
+                'breath_phase': data.get('breath_phase', 0),
+                'heart_phase': data.get('heart_phase', 0),
+                'cluster_index': data.get('cluster_index', 0),
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        
+        # Detecta o novo formato de dados do Arduino
+        if '-----Human Detected-----' in raw_data:
+            # Verifica se tem o novo formato simples
+            if any(key in raw_data for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
+                data = parse_radar_text_block(raw_data)
+                
+                # Verifica se são dados simulados
+                if 'DADOS SIMULADOS' in raw_data:
+                    logger.info("🎭 [PROCESS] Processando dados simulados do Arduino")
+                    # Marca os dados como simulados para possível tratamento especial
+                    data['is_simulated'] = True
+                else:
+                    data['is_simulated'] = False
+                    
+            # Fallback para formato antigo com Target 1:
+            elif 'Target 1:' in raw_data:
+                data = parse_radar_text_block(raw_data)
+                data['is_simulated'] = False
+            else:
+                logger.warning(f"❌ [PROCESS] Formato de dados não reconhecido: {raw_data[:200]}...")
+                return
+        else:
+            # Tenta JSON ou parser antigo
+            try:
+                import json
+                json_obj = json.loads(raw_data)
+                if 'active_people' in json_obj and json_obj['active_people']:
+                    person = json_obj['active_people'][0]
+                    data = {
+                        'x_point': float(person.get('x_pos', 0)),
+                        'y_point': float(person.get('y_pos', 0)),
+                        'distance': float(person.get('distance_raw', 0)),
+                        'confidence': float(person.get('confidence', 0)),
+                        'move_speed': 0.0,
+                        'heart_rate': None,
+                        'breath_rate': None,
+                        'dop_index': 0,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'is_simulated': False
+                    }
+                else:
+                    logger.warning('[PROCESS] JSON recebido não contém pessoa ativa.')
+                    return
+            except Exception:
+                data = parse_serial_data(raw_data)
+                if not data:
+                    logger.warning(f"❌ [PROCESS] Mensagem falhou no parse! Total de falhas: {self.messages_failed}")
+                    self.messages_failed += 1
+                    return
+                data['is_simulated'] = False
+        
+        self.messages_processed += 1
+        
+        # Log diferente para dados simulados
+        if data.get('is_simulated', False):
+            logger.info(f"🎭 [PROCESS] Dados simulados processados! Total: {self.messages_processed}")
+        else:
+            logger.info(f"✅ [PROCESS] Mensagem processada com sucesso! Total processadas: {self.messages_processed}")
+        
+        x = data.get('x_point', 0)
+        y = data.get('y_point', 0)
+        move_speed = abs(data.get('dop_index', 0) * RANGE_STEP) if 'dop_index' in data else data.get('move_speed', 0)
+        
+        if self._is_new_person(x, y, move_speed):
+            self.current_session_id = self._generate_session_id()
+            self.last_activity_time = time.time()
+            self.session_positions = []
+        
+        self.last_position = (x, y)
+        
+        # Buffer circular para posições de sessão (máximo 10 posições)
+        if len(self.session_positions) >= 10:
+            self.session_positions.pop(0)  # Remove a posição mais antiga
+        
+        self.session_positions.append({
+            'x': x,
+            'y': y,
+            'speed': move_speed,
+            'timestamp': time.time()
+        })
+        
         self._update_session()
-
-        # Usar os valores de batimentos e respiração diretamente do radar se disponíveis
+        
         heart_rate = data.get('heart_rate')
         breath_rate = data.get('breath_rate')
         
-        # Se não houver valores diretos, calcular usando as fases
         if heart_rate is None or breath_rate is None:
             heart_rate, breath_rate = self.vital_signs_manager.calculate_vital_signs(
                 data.get('total_phase', 0),
@@ -619,13 +1203,15 @@ class SerialRadarManager:
                 data.get('heart_phase', 0),
                 data.get('distance', 0)
             )
+        
         distance = data.get('distance', 0)
         if distance == 0:
             x = data.get('x_point', 0)
             y = data.get('y_point', 0)
             distance = (x**2 + y**2)**0.5
-        dop_index = data.get('dop_index', 0)
-        move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else 0
+        
+        dop_index = data.get('dop_index', 0) if 'dop_index' in data else 0
+        move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else data.get('move_speed', 0)
         
         converted_data = {
             'session_id': self.current_session_id,
@@ -636,7 +1222,8 @@ class SerialRadarManager:
             'dop_index': dop_index,
             'heart_rate': heart_rate,
             'breath_rate': breath_rate,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'is_simulated': data.get('is_simulated', False)
         }
         
         section = shelf_manager.get_section_at_position(
@@ -648,95 +1235,119 @@ class SerialRadarManager:
         if section:
             converted_data['section_id'] = section['section_id']
             converted_data['product_id'] = section['product_id']
+            
+            # Calcula satisfação apenas se tiver dados vitais
+            if heart_rate is not None and breath_rate is not None:
+                satisfaction_score = self.analytics_manager.calculate_satisfaction_score(
+                    move_speed, heart_rate, breath_rate, distance
+                )
+                converted_data['satisfaction_score'] = satisfaction_score
+                converted_data['satisfaction_class'] = 'Alto' if satisfaction_score > 7 else 'Médio' if satisfaction_score > 4 else 'Baixo'
+            else:
+                converted_data['satisfaction_score'] = None
+                converted_data['satisfaction_class'] = None
+            
+            # Verifica engajamento
+            converted_data['is_engaged'] = self._check_engagement(
+                section['section_id'], distance, move_speed
+            )
         else:
             converted_data['section_id'] = None
             converted_data['product_id'] = None
+            converted_data['satisfaction_score'] = None
+            converted_data['satisfaction_class'] = None
+            converted_data['is_engaged'] = False
         
-        # Lógica de engajamento
-        is_engaged = False
-        if section:
-            is_engaged = self._check_engagement(section['section_id'], distance, move_speed)
-        converted_data['is_engaged'] = is_engaged
-        
-        satisfaction_score, satisfaction_class = self.analytics_manager.calculate_satisfaction_score(
-            move_speed, heart_rate, breath_rate, distance
-        )
-        converted_data['satisfaction_score'] = satisfaction_score
-        converted_data['satisfaction_class'] = satisfaction_class
-
-        # Formatação da saída
-        output = [
-            "\n" + "="*50,
-            "📡 DADOS DO RADAR",
-            "="*50,
-            f"⏰ {converted_data['timestamp']}",
-            "-"*50
-        ]
-        
-        if section:
-            output.extend([
-                f"📍 SEÇÃO: {section['section_name']}",
-                f"   Produto ID: {section['product_id']}"
-            ])
-        else:
-            output.extend([
-                "📍 SEÇÃO: Fora da área monitorada",
-                "   Produto ID: N/A"
-            ])
-        
-        output.extend([
-            "-"*50,
-            "📊 POSIÇÃO:",
-            f"   X: {converted_data['x_point']:>6.2f} m",
-            f"   Y: {converted_data['y_point']:>6.2f} m",
-            f"   Distância: {converted_data['distance']:>6.2f} m",
-            f"   Velocidade: {converted_data['move_speed']:>6.2f} cm/s",
-            "-"*50,
-            "❤️ SINAIS VITAIS:"
-        ])
-        
-        if heart_rate is not None and breath_rate is not None:
-            output.extend([
-                f"   Batimentos: {heart_rate:>6.1f} bpm",
-                f"   Respiração: {breath_rate:>6.1f} rpm"
-            ])
-        else:
-            output.append("   ⚠️ Aguardando detecção...")
-        
-        output.extend([
-            "-"*50,
-            "🎯 ANÁLISE:",
-            f"   Engajamento: {'✅ Sim' if is_engaged else '❌ Não'}",
-            f"   Score: {converted_data['satisfaction_score']:>6.1f}",
-            f"   Classificação: {converted_data['satisfaction_class']}",
-            "="*50 + "\n"
-        ])
-        
-        # Exibe a saída formatada
-        logger.info("\n".join(output))
-        
-        if self.db_manager:
-            try:
-                success = self.db_manager.insert_radar_data(converted_data)
-                if success:
-                    logger.debug("Dados enviados para o Google Sheets")
-                else:
-                    logger.error("Falha ao enviar dados para o Google Sheets")
-            except Exception as e:
-                logger.error(f"Erro ao enviar para o Google Sheets: {str(e)}")
-                logger.error(traceback.format_exc())
-        else:
-            logger.warning("Gerenciador de planilha não disponível")
+        # Envia para Google Sheets
+        try:
+            self.db_manager.insert_radar_data(converted_data)
+            
+            # Log diferente para dados simulados
+            if converted_data.get('is_simulated', False):
+                logger.debug(f"🎭 [SHEETS] Dados simulados enviados: x={x:.2f}, y={y:.2f}, heart={heart_rate}, breath={breath_rate}")
+            else:
+                logger.debug(f"✅ [SHEETS] Dados enviados: x={x:.2f}, y={y:.2f}, heart={heart_rate}, breath={breath_rate}")
+                
+        except Exception as e:
+            logger.error(f"❌ [SHEETS] Erro ao enviar dados: {str(e)}")
+            logger.error(traceback.format_exc())
 
 def main():
-    logger.info("Iniciando GoogleSheetsManager...")
+    logger.info("🚀 Iniciando sistema de radar serial...")
+    
     try:
         # Obtém o caminho absoluto do diretório onde o script está localizado
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Constrói o caminho absoluto para o arquivo de credenciais
-        credentials_file_path = os.path.join(script_dir, 'serial_radar', 'credenciais.json')
+        
+        # Verifica se já estamos na pasta serial_radar ou se precisamos navegar até ela
+        if script_dir.endswith('serial_radar'):
+            # Já estamos na pasta serial_radar
+            credentials_file_path = os.path.join(script_dir, 'credenciais.json')
+        else:
+            # Precisamos navegar até a pasta serial_radar
+            credentials_file_path = os.path.join(script_dir, 'serial_radar', 'credenciais.json')
+        
         gsheets_manager = GoogleSheetsManager(credentials_file_path, 'codigo_rasp')
         logger.info("✅ GoogleSheetsManager iniciado com sucesso!")
+        
+        # Teste de conectividade do Google Sheets
+        try:
+            test_data = {
+                'session_id': 'test_session',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'x_point': 0.0,
+                'y_point': 0.0,
+                'move_speed': 0.0,
+                'heart_rate': 0.0,
+                'breath_rate': 0.0,
+                'distance': 0.0,
+                'section_id': None,
+                'product_id': None,
+                'satisfaction_score': 0.0,
+                'satisfaction_class': 'TEST',
+                'is_engaged': False
+            }
+            
+            test_result = gsheets_manager.insert_radar_data(test_data)
+            
+            if test_result:
+                logger.info("✅ [MAIN] Teste do Google Sheets bem-sucedido!")
+            else:
+                logger.error("❌ [MAIN] Teste do Google Sheets falhou!")
+                
+        except Exception as e:
+            logger.error(f"❌ [MAIN] Erro no teste do Google Sheets: {str(e)}")
+            logger.error(traceback.format_exc())
+        
+        # Teste do parser com dados simulados
+        test_radar_data = """-----Human Detected-----
+Target 1:
+x_point: 0.50
+y_point: 1.20
+dop_index: 6
+move_speed: 15.20 cm/s
+distance: 1.30
+heart_rate: 75.0
+breath_rate: 15.0"""
+        
+        parsed_data = parse_serial_data(test_radar_data)
+        
+        if parsed_data:
+            logger.info("✅ [MAIN] Parser funcionando corretamente!")
+        else:
+            logger.error("❌ [MAIN] Parser falhou com dados simulados!")
+        
+        # Teste completo do processamento
+        radar_manager_test = SerialRadarManager('/dev/ttyACM0', 115200)
+        radar_manager_test.db_manager = gsheets_manager
+        
+        try:
+            radar_manager_test.process_radar_data(test_radar_data)
+            logger.info("✅ [MAIN] Processamento completo funcionando!")
+        except Exception as e:
+            logger.error(f"❌ [MAIN] Erro no processamento completo: {str(e)}")
+            logger.error(traceback.format_exc())
+        
     except Exception as e:
         logger.error(f"❌ Erro ao criar instância do GoogleSheetsManager: {e}")
         logger.error(traceback.format_exc())
@@ -745,26 +1356,45 @@ def main():
     # Definindo a porta serial diretamente
     port = '/dev/ttyACM0'
     baudrate = int(os.getenv("SERIAL_BAUDRATE", "115200"))
+    
     radar_manager = SerialRadarManager(port, baudrate)
+    
     try:
-        logger.info(f"Iniciando SerialRadarManager...")
+        logger.info(f"🔄 Iniciando SerialRadarManager...")
+        
         success = radar_manager.start(gsheets_manager)
+        
         if not success:
             logger.error("❌ Falha ao iniciar o gerenciador de radar serial")
             return
+        
         logger.info("="*50)
         logger.info("🚀 Sistema Radar Serial iniciado com sucesso!")
         logger.info(f"📡 Porta serial: {radar_manager.port}")
         logger.info(f"📡 Baudrate: {radar_manager.baudrate}")
         logger.info("⚡ Pressione Ctrl+C para encerrar")
         logger.info("="*50)
+        
+        # Contador para mostrar status periódico
+        loop_count = 0
+        
         while True:
             time.sleep(1)
+            loop_count += 1
+            
+            # Mostra status a cada 30 segundos
+            if loop_count % 30 == 0:
+                logger.info(f"📊 [STATUS] Sistema rodando há {loop_count} segundos")
+                logger.info(f"📊 [STATUS] Mensagens: Recebidas={radar_manager.messages_received}, Processadas={radar_manager.messages_processed}, Falharam={radar_manager.messages_failed}")
+                logger.info(f"📊 [STATUS] Conexão serial: {'✅ Ativa' if radar_manager.serial_connection and radar_manager.serial_connection.is_open else '❌ Inativa'}")
+                logger.info(f"📊 [STATUS] Thread de recepção: {'✅ Ativa' if radar_manager.receive_thread and radar_manager.receive_thread.is_alive() else '❌ Inativa'}")
+            
     except KeyboardInterrupt:
-        logger.info("Encerrando por interrupção do usuário...")
+        logger.info("🔄 Encerrando por interrupção do usuário...")
+        
     finally:
         radar_manager.stop()
-        logger.info("Sistema encerrado!")
+        logger.info("✅ Sistema encerrado!")
 
 if __name__ == "__main__":
     main() 
