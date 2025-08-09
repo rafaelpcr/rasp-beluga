@@ -130,68 +130,109 @@ class GoogleSheetsManager:
 
 def parse_serial_data(raw_data):
     try:
-        # Verificação detalhada dos marcadores
+        # Suporte para múltiplos formatos de dados do Arduino
+        
+        # FORMATO 1: Formato simples (send_formatted_data)
+        # breath_rate: 15.00
+        # heart_rate: 75.00  
+        # x_position: 0.50
+        # y_position: 1.20
+        if 'breath_rate:' in raw_data and 'x_position:' in raw_data:
+            logger.debug("📡 [PARSER] Detectado formato simples do Arduino")
+            
+            breath_rate_match = re.search(r'breath_rate\s*:\s*([-+]?\d*\.?\d+)', raw_data, re.IGNORECASE)
+            heart_rate_match = re.search(r'heart_rate\s*:\s*([-+]?\d*\.?\d+)', raw_data, re.IGNORECASE)
+            x_position_match = re.search(r'x_position\s*:\s*([-+]?\d*\.?\d+)', raw_data, re.IGNORECASE)
+            y_position_match = re.search(r'y_position\s*:\s*([-+]?\d*\.?\d+)', raw_data, re.IGNORECASE)
+            
+            if x_position_match and y_position_match:
+                data = {
+                    'x_point': float(x_position_match.group(1)),
+                    'y_point': float(y_position_match.group(1)),
+                    'breath_rate': float(breath_rate_match.group(1)) if breath_rate_match else 15.0,
+                    'heart_rate': float(heart_rate_match.group(1)) if heart_rate_match else 75.0,
+                    'distance': math.sqrt(float(x_position_match.group(1))**2 + float(y_position_match.group(1))**2),
+                    'move_speed': 0.0,
+                    'dop_index': 0,
+                    'cluster_index': 0,
+                    'total_phase': 0.0,
+                    'breath_phase': 0.0,
+                    'heart_phase': 0.0
+                }
+                return data
+        
+        # FORMATO 2: Formato completo (Human Detected + Target)
+        # -----Human Detected-----
+        # Target 1:
+        # ...dados...
         has_human_detected = '-----Human Detected-----' in raw_data
         has_target_1 = 'Target 1:' in raw_data
         
-        # Regex ainda mais tolerante: aceita espaços extras, quebras de linha e maiúsculas/minúsculas
-        x_pattern = r'x_point\s*:\s*([-+]?\d*\.?\d+)'  # aceita inteiro ou float, sinal opcional
-        y_pattern = r'y_point\s*:\s*([-+]?\d*\.?\d+)'
-        dop_pattern = r'dop_index\s*:\s*([-+]?\d+)'  # aceita sinal opcional
-        cluster_pattern = r'cluster_index\s*:\s*(\d+)'
-        speed_pattern = r'move_speed\s*:\s*([-+]?\d*\.?\d+)\s*cm/s'
-        total_phase_pattern = r'total_phase\s*:\s*([-+]?\d*\.?\d+)'
-        breath_phase_pattern = r'breath_phase\s*:\s*([-+]?\d*\.?\d+)'
-        heart_phase_pattern = r'heart_phase\s*:\s*([-+]?\d*\.?\d+)'
-        breath_rate_pattern = r'breath_rate\s*:\s*([-+]?\d*\.?\d+)'
-        heart_rate_pattern = r'heart_rate\s*:\s*([-+]?\d*\.?\d+)'
-        distance_pattern = r'distance\s*:\s*([-+]?\d*\.?\d+)'
+        if has_human_detected and has_target_1:
+            logger.debug("📡 [PARSER] Detectado formato completo do Arduino")
+            
+            # Padrões regex melhorados para o novo formato
+            x_pattern = r'x_point\s*:\s*([-+]?\d*\.?\d+)'
+            y_pattern = r'y_point\s*:\s*([-+]?\d*\.?\d+)'
+            dop_pattern = r'dop_index\s*:\s*([-+]?\d+)'
+            cluster_pattern = r'cluster_index\s*:\s*(\d+)'
+            speed_pattern = r'move_speed\s*:\s*([-+]?\d*\.?\d+)\s*cm/s'
+            total_phase_pattern = r'total_phase\s*:\s*([-+]?\d*\.?\d+)'
+            breath_phase_pattern = r'breath_phase\s*:\s*([-+]?\d*\.?\d+)'
+            heart_phase_pattern = r'heart_phase\s*:\s*([-+]?\d*\.?\d+)'
+            breath_rate_pattern = r'breath_rate\s*:\s*([-+]?\d*\.?\d+)'
+            heart_rate_pattern = r'heart_rate\s*:\s*([-+]?\d*\.?\d+)'
+            distance_pattern = r'distance\s*:\s*([-+]?\d*\.?\d+)'
+            
+            x_match = re.search(x_pattern, raw_data, re.IGNORECASE)
+            y_match = re.search(y_pattern, raw_data, re.IGNORECASE)
+            dop_match = re.search(dop_pattern, raw_data, re.IGNORECASE)
+            cluster_match = re.search(cluster_pattern, raw_data, re.IGNORECASE)
+            speed_match = re.search(speed_pattern, raw_data, re.IGNORECASE)
+            total_phase_match = re.search(total_phase_pattern, raw_data, re.IGNORECASE)
+            breath_phase_match = re.search(breath_phase_pattern, raw_data, re.IGNORECASE)
+            heart_phase_match = re.search(heart_phase_pattern, raw_data, re.IGNORECASE)
+            breath_rate_match = re.search(breath_rate_pattern, raw_data, re.IGNORECASE)
+            heart_rate_match = re.search(heart_rate_pattern, raw_data, re.IGNORECASE)
+            distance_match = re.search(distance_pattern, raw_data, re.IGNORECASE)
+            
+            if x_match and y_match:
+                data = {
+                    'x_point': float(x_match.group(1)),
+                    'y_point': float(y_match.group(1)),
+                    'dop_index': int(dop_match.group(1)) if dop_match else 0,
+                    'cluster_index': int(cluster_match.group(1)) if cluster_match else 0,
+                    'move_speed': float(speed_match.group(1))/100 if speed_match else 0.0,
+                    'total_phase': float(total_phase_match.group(1)) if total_phase_match else 0.0,
+                    'breath_phase': float(breath_phase_match.group(1)) if breath_phase_match else 0.0,
+                    'heart_phase': float(heart_phase_match.group(1)) if heart_phase_match else 0.0,
+                    'breath_rate': float(breath_rate_match.group(1)) if breath_rate_match else None,
+                    'heart_rate': float(heart_rate_match.group(1)) if heart_rate_match else None,
+                    'distance': float(distance_match.group(1)) if distance_match else None
+                }
+                
+                # Calcula distância se não fornecida
+                if data['distance'] is None:
+                    data['distance'] = math.sqrt(data['x_point']**2 + data['y_point']**2)
+                
+                # Valores padrão para dados vitais se não fornecidos
+                if data['heart_rate'] is None:
+                    data['heart_rate'] = 75.0
+                
+                if data['breath_rate'] is None:
+                    data['breath_rate'] = 15.0
+                
+                return data
         
-        # Usar flags re.IGNORECASE para aceitar maiúsculas/minúsculas
-        if '-----Human Detected-----' not in raw_data:
-            return None
-        if 'Target 1:' not in raw_data:
+        # FORMATO 3: Mensagens do sistema (não processa dados, só registra)
+        if any(msg in raw_data for msg in ['HEARTBEAT:', 'DEEP SLEEP', 'Acordou', 'Sistema ativo']):
+            logger.debug(f"📡 [PARSER] Mensagem do sistema: {raw_data.strip()}")
             return None
             
-        x_match = re.search(x_pattern, raw_data, re.IGNORECASE)
-        y_match = re.search(y_pattern, raw_data, re.IGNORECASE)
-        dop_match = re.search(dop_pattern, raw_data, re.IGNORECASE)
-        cluster_match = re.search(cluster_pattern, raw_data, re.IGNORECASE)
-        speed_match = re.search(speed_pattern, raw_data, re.IGNORECASE)
-        total_phase_match = re.search(total_phase_pattern, raw_data, re.IGNORECASE)
-        breath_phase_match = re.search(breath_phase_pattern, raw_data, re.IGNORECASE)
-        heart_phase_match = re.search(heart_phase_pattern, raw_data, re.IGNORECASE)
-        breath_rate_match = re.search(breath_rate_pattern, raw_data, re.IGNORECASE)
-        heart_rate_match = re.search(heart_rate_pattern, raw_data, re.IGNORECASE)
-        distance_match = re.search(distance_pattern, raw_data, re.IGNORECASE)
+        # Se nenhum formato foi reconhecido
+        logger.warning(f"⚠️ [PARSER] Formato não reconhecido: {raw_data[:100]}...")
+        return None
         
-        if x_match and y_match:
-            data = {
-                'x_point': float(x_match.group(1)),
-                'y_point': float(y_match.group(1)),
-                'dop_index': int(dop_match.group(1)) if dop_match else 0,
-                'cluster_index': int(cluster_match.group(1)) if cluster_match else 0,
-                'move_speed': float(speed_match.group(1))/100 if speed_match else 0.0,
-                'total_phase': float(total_phase_match.group(1)) if total_phase_match else 0.0,
-                'breath_phase': float(breath_phase_match.group(1)) if breath_phase_match else 0.0,
-                'heart_phase': float(heart_phase_match.group(1)) if heart_phase_match else 0.0,
-                'breath_rate': float(breath_rate_match.group(1)) if breath_rate_match else None,
-                'heart_rate': float(heart_rate_match.group(1)) if heart_rate_match else None,
-                'distance': float(distance_match.group(1)) if distance_match else None
-            }
-            
-            if data['distance'] is None:
-                data['distance'] = math.sqrt(data['x_point']**2 + data['y_point']**2)
-            
-            if data['heart_rate'] is None:
-                data['heart_rate'] = 75.0
-            
-            if data['breath_rate'] is None:
-                data['breath_rate'] = 15.0
-            
-            return data
-        else:
-            return None
     except Exception as e:
         logger.error(f"❌ Erro ao analisar dados seriais: {str(e)}")
         logger.error(traceback.format_exc())
@@ -707,33 +748,50 @@ class SerialRadarManager:
         
         logger.info("✅ [STOP] Sistema de radar parado!")
 
-    def hardware_reset_esp32(self):
+    def hardware_reset_arduino(self):
         """
-        Reinicia a ESP32 via pulso nas linhas DTR/RTS da porta serial.
-        Não interfere na conexão principal do radar.
+        Reinicia o Arduino/ESP32 via pulso nas linhas DTR/RTS da porta serial.
+        Compatível com o novo código Arduino MR60BHA2.
         """
         try:
-            logger.warning("[ESP32 RESET] Iniciando reset via DTR/RTS na porta serial...")
+            logger.warning("[ARDUINO RESET] Iniciando reset via DTR/RTS na porta serial...")
             # Fecha a conexão principal se estiver aberta
             was_open = False
             if self.serial_connection and self.serial_connection.is_open:
                 self.serial_connection.close()
                 was_open = True
+                
+            # Aguarda um pouco antes de fazer o reset
+            time.sleep(1)
+            
             # Abre uma conexão temporária só para reset
             with serial.Serial(self.port, self.baudrate, timeout=1) as ser:
+                # Sequência de reset compatível com ESP32 e Arduino
                 ser.setDTR(False)
                 ser.setRTS(True)
                 time.sleep(0.1)
                 ser.setDTR(True)
                 ser.setRTS(False)
                 time.sleep(0.1)
-            logger.info("[ESP32 RESET] Pulso de reset enviado com sucesso!")
+                
+                # Reset adicional específico para ESP32
+                ser.setDTR(False)
+                time.sleep(0.1)
+                ser.setDTR(True)
+                time.sleep(0.5)
+                
+            logger.info("[ARDUINO RESET] Pulso de reset enviado com sucesso!")
+            
+            # Aguarda Arduino reinicializar (baseado no código Arduino)
+            logger.info("[ARDUINO RESET] Aguardando Arduino reinicializar...")
+            time.sleep(3)  # Arduino precisa de tempo para inicializar
+            
             # Reabre a conexão principal se estava aberta
             if was_open:
                 self.connect()
             return True
         except Exception as e:
-            logger.error(f"[ESP32 RESET] Falha ao resetar ESP32: {e}")
+            logger.error(f"[ARDUINO RESET] Falha ao resetar Arduino: {e}")
             logger.error(traceback.format_exc())
             return False
 
@@ -742,9 +800,9 @@ class SerialRadarManager:
         last_data_time = time.time()
         if not hasattr(self, 'last_valid_data_time'):
             self.last_valid_data_time = time.time()
-        self.RESET_TIMEOUT = 300  # 5 minutos (mais tolerante com heartbeat)
+        self.RESET_TIMEOUT = 600  # 10 minutos (tolerante com deep sleep do Arduino)
         logger.info("\n🔄 Iniciando loop de recebimento de dados...")
-        logger.info(f"🔍 [SERIAL] Aguardando dados da ESP32...")
+        logger.info(f"🔍 [SERIAL] Aguardando dados do Arduino MR60BHA2...")
 
         bloco_buffer = ""
         coletando_bloco = False
@@ -773,23 +831,35 @@ class SerialRadarManager:
                         
                         # === NOVOS COMANDOS E STATUS DO ARDUINO ===
                         
-                        # Detecta heartbeat do ESP32
-                        if 'HEARTBEAT: Sistema ativo' in line:
-                            logger.debug("💓 [SERIAL] Heartbeat recebido - ESP32 ativo")
+                        # Detecta heartbeat do ESP32/Arduino
+                        if 'HEARTBEAT: Sistema ativo' in line or 'HEARTBEAT:' in line:
+                            logger.debug("💓 [SERIAL] Heartbeat recebido - Sistema ativo")
                             last_data_time = time.time()  # Atualiza timestamp de dados
                             self.last_valid_data_time = time.time()
                             continue
                         
-                        # Detecta deep sleep horário
-                        if '=== DEEP SLEEP HORÁRIO ===' in line:
-                            logger.info("😴 [SERIAL] ESP32 entrando em deep sleep horário (1 minuto)")
+                        # Detecta deep sleep horário (Arduino)
+                        if '=== DEEP SLEEP HORÁRIO ===' in line or 'DEEP SLEEP HORÁRIO' in line:
+                            logger.info("😴 [SERIAL] Arduino entrando em deep sleep horário (1 minuto)")
                             coletando_bloco = False
                             bloco_buffer = ""
                             continue
                         
+                        # Detecta teste de deep sleep (Arduino)
+                        if '=== TESTE DE DEEP SLEEP ===' in line:
+                            logger.info("🧪 [SERIAL] Arduino executando teste de deep sleep")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            continue
+                            
+                        # Detecta entrada em deep sleep
+                        if 'Entrando em deep sleep' in line:
+                            logger.info("😴 [SERIAL] Arduino entrando em deep sleep")
+                            continue
+                        
                         # Detecta saída do deep sleep
-                        if 'Acordou do deep sleep horário' in line or 'Voltando ao modo de operação normal' in line:
-                            logger.info("🌅 [SERIAL] ESP32 saiu do deep sleep - voltando ao normal")
+                        if 'Acordou do deep sleep' in line or 'Voltando ao modo de operação normal' in line:
+                            logger.info("🌅 [SERIAL] Arduino saiu do deep sleep - voltando ao normal")
                             continue
                         
                         # Detecta reset do sistema
@@ -804,14 +874,19 @@ class SerialRadarManager:
                             logger.info("🔧 [SERIAL] ESP32 reinicializando sensor MR60BHA2")
                             continue
                         
-                        # Detecta diagnósticos do sistema
-                        if '=== DIAGNÓSTICO COMPLETO DO SISTEMA ===' in line:
-                            logger.info("🔍 [SERIAL] ESP32 executando diagnóstico completo")
+                        # Detecta diagnósticos do sistema (Arduino)
+                        if '=== DIAGNÓSTICO COMPLETO DO SISTEMA ===' in line or 'DIAGNÓSTICO' in line:
+                            logger.info("🔍 [SERIAL] Arduino executando diagnóstico completo")
                             continue
                         
-                        # Detecta problemas de memória
+                        # Detecta problemas de memória (Arduino)
                         if 'ALERTA: Memória baixa!' in line or 'Fragmentação crítica detectada' in line:
-                            logger.warning("⚠️ [SERIAL] ESP32 detectou problemas de memória")
+                            logger.warning("⚠️ [SERIAL] Arduino detectou problemas de memória")
+                            continue
+                            
+                        # Detecta verificações específicas do Arduino
+                        if any(check in line for check in ['=== DEBUG', '=== VERIFICAÇÃO', '=== TESTE']):
+                            logger.debug(f"🔧 [SERIAL] Arduino: {line.strip()}")
                             continue
                         
                         # Detecta problemas de comunicação
@@ -852,26 +927,46 @@ class SerialRadarManager:
                             logger.debug(f"⏰ [SERIAL] {line.strip()}")
                             continue
                         
-                        # Reduz logs excessivos - só loga quando detecta pessoa
+                        # === DETECÇÃO DE DADOS DO ARDUINO ===
+                        
+                        # Formato simples: linhas individuais de dados
+                        if any(key in line for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
+                            if not coletando_bloco:
+                                logger.debug(f"[SERIAL] Dados simples detectados")
+                                coletando_bloco = True
+                                bloco_buffer = ""
+                            bloco_buffer += line + "\n"
+                            # Se temos todos os 4 campos básicos, processa imediatamente
+                            if all(key in bloco_buffer for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
+                                logger.debug(f"[SERIAL] Processando dados simples completos")
+                                self.process_radar_data(bloco_buffer)
+                                coletando_bloco = False
+                                bloco_buffer = ""
+                                self.last_valid_data_time = time.time()
+                            continue
+                        
+                        # Formato completo: começa com Human Detected
                         if '-----Human Detected-----' in line:
-                            logger.debug(f"[SERIAL] Bloco de dados iniciado")
+                            logger.debug(f"[SERIAL] Bloco de dados completo iniciado")
                             coletando_bloco = True
                             bloco_buffer = line + "\n"
+                            continue
                         elif coletando_bloco:
                             if line.strip() == "":
                                 # Linha em branco: fim do bloco!
-                                logger.debug(f"[SERIAL] Processando bloco de dados")
+                                logger.debug(f"[SERIAL] Processando bloco de dados completo")
                                 self.process_radar_data(bloco_buffer)
                                 coletando_bloco = False
                                 bloco_buffer = ""
                                 self.last_valid_data_time = time.time()  # Atualiza quando processa dados
                             else:
                                 bloco_buffer += line + "\n"
+                            continue
 
                 current_time = time.time()
                 if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
-                    logger.warning("⚠️ Nenhum dado ou heartbeat recebido por mais de 5 minutos. Executando reset automático da ESP32 via DTR/RTS...")
-                    self.hardware_reset_esp32()
+                    logger.warning("⚠️ Nenhum dado ou heartbeat recebido por mais de 10 minutos. Executando reset automático do Arduino via DTR/RTS...")
+                    self.hardware_reset_arduino()
                     self.last_valid_data_time = current_time
 
                 # Limpeza periódica de memória
@@ -1010,12 +1105,14 @@ class SerialRadarManager:
             return False
 
     def configure_sensor_continuous_mode(self):
-        """Configura sensor para modo contínuo"""
+        """Configura sensor para modo contínuo - Adaptado para novo Arduino"""
         try:
             if self.serial_connection and self.serial_connection.is_open:
-                logger.info("[CONFIG] Configurando sensor para modo contínuo...")
+                logger.info("[CONFIG] Configurando sensor para modo contínuo (Arduino MR60BHA2)...")
                 
-                # Comandos para modo contínuo via Tiny Frame
+                # === COMANDOS ESPECÍFICOS PARA O NOVO ARDUINO ===
+                
+                # Comandos para modo contínuo via Tiny Frame (baseado no código Arduino)
                 continuous_mode_frame = bytes([0x02, 0x01, 0x02, 0x01, 0x06])
                 self.serial_connection.write(continuous_mode_frame)
                 time.sleep(0.5)
@@ -1030,20 +1127,22 @@ class SerialRadarManager:
                 self.serial_connection.write(always_on_frame)
                 time.sleep(0.5)
                 
-                # Comandos ASCII para modo contínuo
+                # === COMANDOS ASCII COMPATÍVEIS COM O ARDUINO ===
                 ascii_commands = [
                     "CONTINUOUS_MODE=1",
                     "SLEEP_MODE=0", 
                     "ALWAYS_ON=1",
                     "TIMEOUT=0",
-                    "CONTINUOUS_DETECTION=1"
+                    "CONTINUOUS_DETECTION=1",
+                    "POSITION_MODE=1",  # Novo: ativa modo de posição
+                    "TARGET_TRACKING=1"  # Novo: ativa rastreamento de alvos
                 ]
                 
                 for cmd in ascii_commands:
                     self.serial_connection.write(f"{cmd}\n".encode())
                     time.sleep(0.2)
                 
-                logger.info("✅ [CONFIG] Sensor configurado para modo contínuo")
+                logger.info("✅ [CONFIG] Sensor configurado para modo contínuo compatível com Arduino")
                 return True
                 
         except Exception as e:
@@ -1110,27 +1209,21 @@ class SerialRadarManager:
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
         
-        # Detecta o novo formato de dados do Arduino
-        if '-----Human Detected-----' in raw_data:
-            # Verifica se tem o novo formato simples
-            if any(key in raw_data for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
-                data = parse_radar_text_block(raw_data)
-                
-                # Verifica se são dados simulados
-                if 'DADOS SIMULADOS' in raw_data:
-                    logger.info("🎭 [PROCESS] Processando dados simulados do Arduino")
-                    # Marca os dados como simulados para possível tratamento especial
-                    data['is_simulated'] = True
-                else:
-                    data['is_simulated'] = False
-                    
-            # Fallback para formato antigo com Target 1:
-            elif 'Target 1:' in raw_data:
-                data = parse_radar_text_block(raw_data)
-                data['is_simulated'] = False
-            else:
-                logger.warning(f"❌ [PROCESS] Formato de dados não reconhecido: {raw_data[:200]}...")
+        # Detecta múltiplos formatos de dados do Arduino
+        if '-----Human Detected-----' in raw_data or any(key in raw_data for key in ['breath_rate:', 'x_position:']):
+            # Usa o parser atualizado que suporta múltiplos formatos
+            data = parse_serial_data(raw_data)
+            
+            if data is None:
+                logger.warning(f"❌ [PROCESS] Parser retornou None para: {raw_data[:200]}...")
                 return
+                
+            # Verifica se são dados simulados (mantém compatibilidade)
+            if 'DADOS SIMULADOS' in raw_data or '🎭' in raw_data:
+                logger.info("🎭 [PROCESS] Processando dados simulados do Arduino")
+                data['is_simulated'] = True
+            else:
+                data['is_simulated'] = False
         else:
             # Tenta JSON ou parser antigo
             try:
