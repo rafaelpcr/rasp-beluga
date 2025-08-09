@@ -760,15 +760,9 @@ class SerialRadarManager:
                 logger.error("❌ [START] Falha ao conectar com o radar")
                 return False
             
-            logger.info("✅ [START] Conectado ao radar com sucesso!")
-            
-            # === CONFIGURAÇÃO INICIAL DO SENSOR ===
-            logger.info("🔧 [START] Configurando sensor para modo contínuo...")
+            # Configuração inicial do sensor (silenciosa)
             self.configure_sensor_continuous_mode()
-            
-            # Aguarda sensor estabilizar
-            logger.info("⏳ [START] Aguardando sensor estabilizar...")
-            time.sleep(3)
+            time.sleep(3)  # Aguarda sensor estabilizar
             
             # Inicia thread de recepção
             self.receive_thread = threading.Thread(target=self.receive_data_loop, daemon=True)
@@ -778,7 +772,6 @@ class SerialRadarManager:
             self.keep_alive_thread = threading.Thread(target=self._keep_alive_loop, daemon=True)
             self.keep_alive_thread.start()
             
-            logger.info("✅ [START] Sistema de radar iniciado com sucesso!")
             return True
             
         except Exception as e:
@@ -879,8 +872,7 @@ class SerialRadarManager:
         if not hasattr(self, 'last_valid_data_time'):
             self.last_valid_data_time = time.time()
         self.RESET_TIMEOUT = 600  # 10 minutos (tolerante com deep sleep do Arduino)
-        logger.info("\n🔄 Iniciando loop de recebimento de dados...")
-        logger.info(f"🔍 [SERIAL] Aguardando dados do Arduino MR60BHA2...")
+        # Loop de recepção de dados iniciado
 
         bloco_buffer = ""
         coletando_bloco = False
@@ -907,20 +899,23 @@ class SerialRadarManager:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip('\r')  # Remove \r também
                         
-                        # Debug COMPLETO: mostra TODAS as linhas para identificar o problema
+                        # Log inteligente: só mostra dados importantes
                         if line.strip():
-                            # Dados importantes - máxima prioridade
+                            # Dados do radar - prioridade máxima
                             if any(key in line for key in ['breath_rate', 'heart_rate', 'x_position', 'y_position', 'Human Detected', 'Target']):
-                                logger.info(f"🎯 [RAW-DATA] '{line.strip()}'")
-                            # Dados simulados
+                                logger.debug(f"🎯 [DATA] '{line.strip()}'")
+                            # Dados simulados - aviso
                             elif 'DADOS SIMULADOS' in line or '🎭' in line:
-                                logger.info(f"🎭 [RAW-SIM] '{line.strip()}'")
-                            # Heartbeat e status (menos verboso)
-                            elif any(common in line for common in ['HEARTBEAT', 'STATUS', 'Loop ativo', 'Sistema rodando', 'Mensagens:']):
-                                logger.debug(f"💓 [RAW-STATUS] '{line.strip()}'")
-                            # Tudo mais - pode ser importante
+                                logger.warning(f"🎭 [SIM] Dados simulados detectados")
+                            # Debug e heartbeat - silencioso
+                            elif any(debug in line for debug in ['DEBUG', 'HEARTBEAT', 'Tentativa', 'Falha na', '===', '🔍']):
+                                logger.debug(f"[DEBUG] {line.strip()}")
+                            # Erros críticos - importante
+                            elif any(critical in line for critical in ['CRÍTICO', 'FALHOU', 'ERROR', '❌']):
+                                logger.warning(f"⚠️ {line.strip()}")
+                            # Outros - silencioso na maioria dos casos
                             else:
-                                logger.info(f"🔍 [RAW-OTHER] '{line.strip()}'")
+                                logger.debug(f"[OTHER] {line.strip()}")
                         
                         # === DETECÇÃO DE DADOS DO ARDUINO (PRIORIDADE MÁXIMA) ===
                         
@@ -1035,9 +1030,8 @@ class SerialRadarManager:
                             logger.warning("😴 [SERIAL] Sensor MR60BHA2 em modo inativo - aguardando ativação")
                             continue
                         
-                        # Detecta dados simulados (para demonstração)
+                        # Ignora linhas de debug simulado
                         if 'DADOS SIMULADOS' in line:
-                            logger.debug("🎭 [SERIAL] ESP32 usando dados simulados para demonstração")
                             continue
                         
                         # Detecta se ESP32 entrou em modo download
@@ -1363,12 +1357,8 @@ class SerialRadarManager:
                 logger.warning(f"❌ [PROCESS] Parser retornou None para: {raw_data[:200]}...")
                 return
                 
-            # Verifica se são dados simulados (mantém compatibilidade)
-            if 'DADOS SIMULADOS' in raw_data or '🎭' in raw_data:
-                logger.info("🎭 [PROCESS] Processando dados simulados do Arduino")
-                data['is_simulated'] = True
-            else:
-                data['is_simulated'] = False
+            # Marca como dados reais (sem simulação automática)
+            data['is_simulated'] = False
         else:
             # Tenta JSON ou parser antigo
             try:
@@ -1401,13 +1391,8 @@ class SerialRadarManager:
         
         self.messages_processed += 1
         
-        # Log diferente para dados simulados com detalhes
-        if data.get('is_simulated', False):
-            logger.info(f"🎭 [PROCESS] Dados simulados processados! Total: {self.messages_processed}")
-            logger.info(f"   🎭 x={data.get('x_point', 0):.2f}, y={data.get('y_point', 0):.2f}, heart={data.get('heart_rate', 0):.1f}, breath={data.get('breath_rate', 0):.1f}")
-        else:
-            logger.info(f"✅ [PROCESS] Mensagem processada com sucesso! Total processadas: {self.messages_processed}")
-            logger.info(f"   📊 x={data.get('x_point', 0):.2f}, y={data.get('y_point', 0):.2f}, heart={data.get('heart_rate', 0):.1f}, breath={data.get('breath_rate', 0):.1f}")
+        # Log conciso do processamento
+        logger.info(f"✅ Cliente detectado | x={data.get('x_point', 0):.1f}m y={data.get('y_point', 0):.1f}m | ❤️{data.get('heart_rate', 0):.0f} 🫁{data.get('breath_rate', 0):.0f}")
         
         x = data.get('x_point', 0)
         y = data.get('y_point', 0)
@@ -1559,80 +1544,20 @@ class SerialRadarManager:
             logger.error(traceback.format_exc())
 
 def main():
-    logger.info("🚀 Iniciando sistema de radar serial...")
+    logger.info("🚀 Iniciando sistema de radar...")
     
     try:
-        # Obtém o caminho absoluto do diretório onde o script está localizado
+        # Inicialização do Google Sheets
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Verifica se já estamos na pasta serial_radar ou se precisamos navegar até ela
         if script_dir.endswith('serial_radar'):
-            # Já estamos na pasta serial_radar
             credentials_file_path = os.path.join(script_dir, 'credenciais.json')
         else:
-            # Precisamos navegar até a pasta serial_radar
             credentials_file_path = os.path.join(script_dir, 'serial_radar', 'credenciais.json')
         
         gsheets_manager = GoogleSheetsManager(credentials_file_path, 'codigo_rasp')
-        logger.info("✅ GoogleSheetsManager iniciado com sucesso!")
+        logger.info("✅ Google Sheets conectado")
         
-        # Teste de conectividade do Google Sheets
-        try:
-            test_data = {
-                'session_id': 'test_session',
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'x_point': 0.0,
-                'y_point': 0.0,
-                'move_speed': 0.0,
-                'heart_rate': 0.0,
-                'breath_rate': 0.0,
-                'distance': 0.0,
-                'section_id': None,
-                'product_id': None,
-                'satisfaction_score': 0.0,
-                'satisfaction_class': 'TEST',
-                'is_engaged': False
-            }
-            
-            test_result = gsheets_manager.insert_radar_data(test_data)
-            
-            if test_result:
-                logger.info("✅ [MAIN] Teste do Google Sheets bem-sucedido!")
-            else:
-                logger.error("❌ [MAIN] Teste do Google Sheets falhou!")
-                
-        except Exception as e:
-            logger.error(f"❌ [MAIN] Erro no teste do Google Sheets: {str(e)}")
-            logger.error(traceback.format_exc())
-        
-        # Teste do parser com dados simulados
-        test_radar_data = """-----Human Detected-----
-Target 1:
-x_point: 0.50
-y_point: 1.20
-dop_index: 6
-move_speed: 15.20 cm/s
-distance: 1.30
-heart_rate: 75.0
-breath_rate: 15.0"""
-        
-        parsed_data = parse_serial_data(test_radar_data)
-        
-        if parsed_data:
-            logger.info("✅ [MAIN] Parser funcionando corretamente!")
-        else:
-            logger.error("❌ [MAIN] Parser falhou com dados simulados!")
-        
-        # Teste completo do processamento
-        radar_manager_test = SerialRadarManager('/dev/ttyACM0', 115200)
-        radar_manager_test.db_manager = gsheets_manager
-        
-        try:
-            radar_manager_test.process_radar_data(test_radar_data)
-            logger.info("✅ [MAIN] Processamento completo funcionando!")
-        except Exception as e:
-            logger.error(f"❌ [MAIN] Erro no processamento completo: {str(e)}")
-            logger.error(traceback.format_exc())
+
         
     except Exception as e:
         logger.error(f"❌ Erro ao criar instância do GoogleSheetsManager: {e}")
@@ -1646,20 +1571,13 @@ breath_rate: 15.0"""
     radar_manager = SerialRadarManager(port, baudrate)
     
     try:
-        logger.info(f"🔄 Iniciando SerialRadarManager...")
-        
         success = radar_manager.start(gsheets_manager)
         
         if not success:
-            logger.error("❌ Falha ao iniciar o gerenciador de radar serial")
+            logger.error("❌ Falha ao iniciar o radar")
             return
         
-        logger.info("="*50)
-        logger.info("🚀 Sistema Radar Serial iniciado com sucesso!")
-        logger.info(f"📡 Porta serial: {radar_manager.port}")
-        logger.info(f"📡 Baudrate: {radar_manager.baudrate}")
-        logger.info("⚡ Pressione Ctrl+C para encerrar")
-        logger.info("="*50)
+        logger.info(f"✅ Sistema iniciado - Porta: {radar_manager.port} | Pressione Ctrl+C para encerrar")
         
         # Contador para mostrar status periódico
         loop_count = 0
