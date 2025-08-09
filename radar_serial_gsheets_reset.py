@@ -622,70 +622,74 @@ class SerialRadarManager:
 
     def find_serial_port(self):
         """Detecta automaticamente a porta serial do Arduino/ESP32"""
-        import serial.tools.list_ports
-        
-        ports = list(serial.tools.list_ports.comports())
-        if not ports:
-            logger.error("❌ Nenhuma porta serial encontrada!")
-            return None
-        
-        logger.info(f"🔍 Detectando porta serial... {len(ports)} porta(s) encontrada(s)")
-        
-        # Lista todas as portas encontradas para debug
-        for i, port in enumerate(ports):
-            logger.info(f"   {i+1}. {port.device} - {port.description}")
-            if port.manufacturer:
-                logger.info(f"      Fabricante: {port.manufacturer}")
-        
-        # Lista de prioridades para detecção
-        priority_keywords = [
-            # ESP32 específico
-            ['esp32', 'esp-32'],
-            # Arduino específico  
-            ['arduino', 'uno', 'nano', 'mega'],
-            # Chips USB-Serial mais comuns
-            ['cp210', 'cp2102', 'cp2104'],
-            ['ch340', 'ch341'],
-            ['ft232', 'ftdi'],
-            ['pl2303'],
-            # Genéricos
-            ['usb', 'serial', 'uart']
-        ]
-        
-        # Primeiro: tenta encontrar por palavras-chave prioritárias
-        for priority in priority_keywords:
+        try:
+            import serial.tools.list_ports
+            
+            logger.info("🔍 Buscando portas seriais disponíveis...")
+            ports = list(serial.tools.list_ports.comports())
+            
+            if not ports:
+                logger.error("❌ Nenhuma porta serial encontrada!")
+                return None
+            
+            logger.info(f"📋 {len(ports)} porta(s) encontrada(s):")
+            
+            # Lista todas as portas para debug
+            for i, port in enumerate(ports):
+                logger.info(f"   {i+1}. {port.device}")
+                logger.info(f"      Descrição: {port.description}")
+                if hasattr(port, 'manufacturer') and port.manufacturer:
+                    logger.info(f"      Fabricante: {port.manufacturer}")
+            
+            # PRIORIDADE 1: Busca ESP32/Espressif primeiro
             for port in ports:
-                desc_lower = port.description.lower()
-                device_lower = port.device.lower()
+                desc = str(port.description).lower()
+                manuf = str(getattr(port, 'manufacturer', '')).lower()
                 
-                if any(keyword in desc_lower or keyword in device_lower for keyword in priority):
-                    logger.info(f"✅ Porta detectada: {port.device}")
-                    logger.info(f"   📝 Descrição: {port.description}")
-                    logger.info(f"   🔧 Fabricante: {port.manufacturer or 'Desconhecido'}")
+                if 'espressif' in manuf or 'esp32' in desc or 'esp-32' in desc:
+                    logger.info(f"✅ ESP32 detectado: {port.device}")
                     return port.device
-        
-        # Segundo: procura por padrões de nome de dispositivo
-        for port in ports:
-            device_lower = port.device.lower()
-            # Padrões comuns no Linux/macOS/Windows
-            if any(pattern in device_lower for pattern in 
-                   ['ttyusb', 'ttyacm', 'cu.usb', 'cu.wchusbserial', 'com']):
-                logger.info(f"✅ Porta detectada por padrão: {port.device}")
-                logger.info(f"   📝 Descrição: {port.description}")
-                return port.device
-        
-        # Terceiro: testa comunicação com cada porta
-        logger.warning("⚠️ Tentando detectar por teste de comunicação...")
-        for port in ports:
-            if self._test_port_communication(port.device):
-                logger.info(f"✅ Porta detectada por teste: {port.device}")
-                logger.info(f"   📝 Descrição: {port.description}")
-                return port.device
-        
-        # Último recurso: usa a primeira porta disponível
-        logger.warning(f"⚠️ Usando primeira porta disponível: {ports[0].device}")
-        logger.info(f"   📝 Descrição: {ports[0].description}")
-        return ports[0].device
+            
+            # PRIORIDADE 2: Busca Arduino
+            for port in ports:
+                desc = str(port.description).lower()
+                if 'arduino' in desc or 'uno' in desc or 'nano' in desc:
+                    logger.info(f"✅ Arduino detectado: {port.device}")
+                    return port.device
+            
+            # PRIORIDADE 3: Busca chips USB-Serial comuns
+            for port in ports:
+                desc = str(port.description).lower()
+                device = str(port.device).lower()
+                
+                # Chips conhecidos
+                if any(chip in desc for chip in ['cp210', 'ch340', 'ft232', 'pl2303']):
+                    logger.info(f"✅ Chip USB-Serial detectado: {port.device}")
+                    return port.device
+                
+                # Padrões de nome no macOS/Linux
+                if any(pattern in device for pattern in ['usbmodem', 'ttyusb', 'ttyacm']):
+                    logger.info(f"✅ Porta USB detectada: {port.device}")
+                    return port.device
+            
+            # ÚLTIMO RECURSO: Primeira porta que não seja Bluetooth
+            for port in ports:
+                device_lower = str(port.device).lower()
+                desc_lower = str(port.description).lower()
+                
+                # Evita portas Bluetooth e debug console
+                if not any(skip in device_lower or skip in desc_lower for skip in 
+                          ['bluetooth', 'debug-console', 'incoming-port']):
+                    logger.warning(f"⚠️ Usando primeira porta válida: {port.device}")
+                    return port.device
+            
+            # Se tudo falhar, usa a primeira
+            logger.warning(f"⚠️ Usando primeira porta disponível: {ports[0].device}")
+            return ports[0].device
+            
+        except Exception as e:
+            logger.error(f"❌ Erro na detecção de porta: {str(e)}")
+            return None
     
     def _test_port_communication(self, port_device):
         """Testa se uma porta pode ser aberta e comunicar"""
