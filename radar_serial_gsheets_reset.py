@@ -16,7 +16,7 @@ import json
 
 # Configuração básica de logging
 logging.basicConfig(
-    level=logging.INFO,  # Mudando para INFO para reduzir poluição do terminal
+    level=logging.INFO,  # Voltando para INFO
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('radar_serial.log'),
@@ -905,7 +905,60 @@ class SerialRadarManager:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip('\r')  # Remove \r também
                         
-                        # === NOVOS COMANDOS E STATUS DO ARDUINO ===
+                        # Debug COMPLETO: mostra TODAS as linhas para identificar o problema
+                        if line.strip():
+                            # Dados importantes - máxima prioridade
+                            if any(key in line for key in ['breath_rate', 'heart_rate', 'x_position', 'y_position', 'Human Detected', 'Target']):
+                                logger.info(f"🎯 [RAW-DATA] '{line.strip()}'")
+                            # Dados simulados
+                            elif 'DADOS SIMULADOS' in line or '🎭' in line:
+                                logger.info(f"🎭 [RAW-SIM] '{line.strip()}'")
+                            # Heartbeat e status (menos verboso)
+                            elif any(common in line for common in ['HEARTBEAT', 'STATUS', 'Loop ativo', 'Sistema rodando', 'Mensagens:']):
+                                logger.debug(f"💓 [RAW-STATUS] '{line.strip()}'")
+                            # Tudo mais - pode ser importante
+                            else:
+                                logger.info(f"🔍 [RAW-OTHER] '{line.strip()}'")
+                        
+                        # === DETECÇÃO DE DADOS DO ARDUINO (PRIORIDADE MÁXIMA) ===
+                        
+                        # Formato simples: linhas individuais de dados
+                        if any(key in line for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
+                            if not coletando_bloco:
+                                logger.info(f"📡 [SERIAL] Dados simples detectados: {line.strip()}")
+                                coletando_bloco = True
+                                bloco_buffer = ""
+                            bloco_buffer += line + "\n"
+                            # Se temos todos os 4 campos básicos, processa imediatamente
+                            if all(key in bloco_buffer for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
+                                logger.info(f"📊 [SERIAL] Processando dados simples completos:")
+                                logger.info(f"📊 Dados recebidos:\n{bloco_buffer}")
+                                self.process_radar_data(bloco_buffer)
+                                coletando_bloco = False
+                                bloco_buffer = ""
+                                self.last_valid_data_time = time.time()
+                            continue
+                        
+                        # Formato completo: começa with Human Detected
+                        if '-----Human Detected-----' in line:
+                            logger.info(f"🎯 [SERIAL] Bloco de dados completo iniciado")
+                            coletando_bloco = True
+                            bloco_buffer = line + "\n"
+                            continue
+                        elif coletando_bloco:
+                            if line.strip() == "":
+                                # Linha em branco: fim do bloco!
+                                logger.info(f"📊 [SERIAL] Processando bloco de dados completo:")
+                                logger.info(f"📊 Dados recebidos:\n{bloco_buffer}")
+                                self.process_radar_data(bloco_buffer)
+                                coletando_bloco = False
+                                bloco_buffer = ""
+                                self.last_valid_data_time = time.time()  # Atualiza quando processa dados
+                            else:
+                                bloco_buffer += line + "\n"
+                            continue
+                        
+                        # === COMANDOS E STATUS DO ARDUINO ===
                         
                         # Detecta heartbeat do ESP32/Arduino
                         if 'HEARTBEAT: Sistema ativo' in line or 'HEARTBEAT:' in line:
@@ -1003,41 +1056,7 @@ class SerialRadarManager:
                             logger.debug(f"⏰ [SERIAL] {line.strip()}")
                             continue
                         
-                        # === DETECÇÃO DE DADOS DO ARDUINO ===
-                        
-                        # Formato simples: linhas individuais de dados
-                        if any(key in line for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
-                            if not coletando_bloco:
-                                logger.debug(f"[SERIAL] Dados simples detectados")
-                                coletando_bloco = True
-                                bloco_buffer = ""
-                            bloco_buffer += line + "\n"
-                            # Se temos todos os 4 campos básicos, processa imediatamente
-                            if all(key in bloco_buffer for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
-                                logger.debug(f"[SERIAL] Processando dados simples completos")
-                                self.process_radar_data(bloco_buffer)
-                                coletando_bloco = False
-                                bloco_buffer = ""
-                                self.last_valid_data_time = time.time()
-                            continue
-                        
-                        # Formato completo: começa com Human Detected
-                        if '-----Human Detected-----' in line:
-                            logger.debug(f"[SERIAL] Bloco de dados completo iniciado")
-                            coletando_bloco = True
-                            bloco_buffer = line + "\n"
-                            continue
-                        elif coletando_bloco:
-                            if line.strip() == "":
-                                # Linha em branco: fim do bloco!
-                                logger.debug(f"[SERIAL] Processando bloco de dados completo")
-                                self.process_radar_data(bloco_buffer)
-                                coletando_bloco = False
-                                bloco_buffer = ""
-                                self.last_valid_data_time = time.time()  # Atualiza quando processa dados
-                            else:
-                                bloco_buffer += line + "\n"
-                            continue
+
 
                 current_time = time.time()
                 if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
@@ -1332,11 +1351,13 @@ class SerialRadarManager:
         
         self.messages_processed += 1
         
-        # Log diferente para dados simulados
+        # Log diferente para dados simulados com detalhes
         if data.get('is_simulated', False):
             logger.info(f"🎭 [PROCESS] Dados simulados processados! Total: {self.messages_processed}")
+            logger.info(f"   🎭 x={data.get('x_point', 0):.2f}, y={data.get('y_point', 0):.2f}, heart={data.get('heart_rate', 0):.1f}, breath={data.get('breath_rate', 0):.1f}")
         else:
             logger.info(f"✅ [PROCESS] Mensagem processada com sucesso! Total processadas: {self.messages_processed}")
+            logger.info(f"   📊 x={data.get('x_point', 0):.2f}, y={data.get('y_point', 0):.2f}, heart={data.get('heart_rate', 0):.1f}, breath={data.get('breath_rate', 0):.1f}")
         
         x = data.get('x_point', 0)
         y = data.get('y_point', 0)
