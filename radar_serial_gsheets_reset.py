@@ -32,7 +32,7 @@ logging.getLogger('gspread').setLevel(logging.WARNING)
 load_dotenv()
 
 SERIAL_CONFIG = {
-    'port': os.getenv('SERIAL_PORT', '/dev/ttyACM0'),
+    'port': None,  # Será detectada automaticamente
     'baudrate': int(os.getenv('SERIAL_BAUDRATE', 115200))
 }
 RANGE_STEP = 2.5
@@ -621,32 +621,104 @@ class SerialRadarManager:
             self.last_activity_time = current_time
 
     def find_serial_port(self):
+        """Detecta automaticamente a porta serial do Arduino/ESP32"""
         import serial.tools.list_ports
+        
         ports = list(serial.tools.list_ports.comports())
         if not ports:
-            logger.error("Nenhuma porta serial encontrada!")
+            logger.error("❌ Nenhuma porta serial encontrada!")
             return None
+        
+        logger.info(f"🔍 Detectando porta serial... {len(ports)} porta(s) encontrada(s)")
+        
+        # Lista todas as portas encontradas para debug
+        for i, port in enumerate(ports):
+            logger.info(f"   {i+1}. {port.device} - {port.description}")
+            if port.manufacturer:
+                logger.info(f"      Fabricante: {port.manufacturer}")
+        
+        # Lista de prioridades para detecção
+        priority_keywords = [
+            # ESP32 específico
+            ['esp32', 'esp-32'],
+            # Arduino específico  
+            ['arduino', 'uno', 'nano', 'mega'],
+            # Chips USB-Serial mais comuns
+            ['cp210', 'cp2102', 'cp2104'],
+            ['ch340', 'ch341'],
+            ['ft232', 'ftdi'],
+            ['pl2303'],
+            # Genéricos
+            ['usb', 'serial', 'uart']
+        ]
+        
+        # Primeiro: tenta encontrar por palavras-chave prioritárias
+        for priority in priority_keywords:
+            for port in ports:
+                desc_lower = port.description.lower()
+                device_lower = port.device.lower()
+                
+                if any(keyword in desc_lower or keyword in device_lower for keyword in priority):
+                    logger.info(f"✅ Porta detectada: {port.device}")
+                    logger.info(f"   📝 Descrição: {port.description}")
+                    logger.info(f"   🔧 Fabricante: {port.manufacturer or 'Desconhecido'}")
+                    return port.device
+        
+        # Segundo: procura por padrões de nome de dispositivo
         for port in ports:
-            desc_lower = port.description.lower()
-            if any(term in desc_lower for term in
-                  ['usb', 'serial', 'uart', 'cp210', 'ch340', 'ft232', 'arduino', 'esp32']):
-                logger.info(f"Porta serial encontrada: {port.device} ({port.description})")
+            device_lower = port.device.lower()
+            # Padrões comuns no Linux/macOS/Windows
+            if any(pattern in device_lower for pattern in 
+                   ['ttyusb', 'ttyacm', 'cu.usb', 'cu.wchusbserial', 'com']):
+                logger.info(f"✅ Porta detectada por padrão: {port.device}")
+                logger.info(f"   📝 Descrição: {port.description}")
                 return port.device
-        logger.info(f"Usando primeira porta serial disponível: {ports[0].device}")
+        
+        # Terceiro: testa comunicação com cada porta
+        logger.warning("⚠️ Tentando detectar por teste de comunicação...")
+        for port in ports:
+            if self._test_port_communication(port.device):
+                logger.info(f"✅ Porta detectada por teste: {port.device}")
+                logger.info(f"   📝 Descrição: {port.description}")
+                return port.device
+        
+        # Último recurso: usa a primeira porta disponível
+        logger.warning(f"⚠️ Usando primeira porta disponível: {ports[0].device}")
+        logger.info(f"   📝 Descrição: {ports[0].description}")
         return ports[0].device
+    
+    def _test_port_communication(self, port_device):
+        """Testa se uma porta pode ser aberta e comunicar"""
+        try:
+            with serial.Serial(port_device, self.baudrate, timeout=1) as test_serial:
+                # Tenta ler alguns bytes para ver se há atividade
+                test_serial.read(10)
+                return True
+        except Exception:
+            return False
 
     def connect(self):
-        # Se a porta não existir mais, tenta detectar automaticamente
-        if not self.port or not os.path.exists(self.port):
-            logger.warning(f"⚠️ Porta serial {self.port} não encontrada. Tentando detectar automaticamente...")
-            
+        # Sempre detecta automaticamente a porta serial
+        if not self.port:
+            logger.info("🔍 Detectando porta serial automaticamente...")
             detected_port = self.find_serial_port()
             if detected_port:
                 self.port = detected_port
-                logger.info(f"✅ Porta serial detectada automaticamente: {self.port}")
+                logger.info(f"✅ Porta serial detectada: {self.port}")
             else:
                 logger.error("❌ Nenhuma porta serial disponível para conexão!")
                 return False
+        else:
+            # Verifica se a porta atual ainda existe
+            if not os.path.exists(self.port):
+                logger.warning(f"⚠️ Porta {self.port} desconectada. Detectando nova porta...")
+                detected_port = self.find_serial_port()
+                if detected_port:
+                    self.port = detected_port
+                    logger.info(f"✅ Nova porta detectada: {self.port}")
+                else:
+                    logger.error("❌ Nenhuma porta serial disponível!")
+                    return False
         
         try:
             logger.info(f"🔄 Conectando à porta serial {self.port} (baudrate: {self.baudrate})...")
@@ -1447,8 +1519,8 @@ breath_rate: 15.0"""
         logger.error(traceback.format_exc())
         return
     
-    # Definindo a porta serial diretamente
-    port = '/dev/ttyACM0'
+    # Detecção automática de porta - sem porta fixa
+    port = None  # Será detectada automaticamente
     baudrate = int(os.getenv("SERIAL_BAUDRATE", "115200"))
     
     radar_manager = SerialRadarManager(port, baudrate)
