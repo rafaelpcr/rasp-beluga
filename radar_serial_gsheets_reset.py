@@ -567,6 +567,8 @@ class SerialRadarManager:
         self.messages_processed = 0
         self.messages_failed = 0
         
+        # Removido: estatísticas de satisfação desnecessárias
+        
         # Sistema de retry para reconexões
         self.consecutive_errors = 0
         self.MAX_CONSECUTIVE_ERRORS = 5
@@ -1260,6 +1262,54 @@ class SerialRadarManager:
             
         except Exception as e:
             logger.error(f"[MEMORY] Erro na limpeza: {str(e)}")
+    
+    def _show_satisfaction_summary(self):
+        """Mostra resumo periódico das estatísticas de satisfação"""
+        try:
+            if not self.satisfaction_history:
+                return
+                
+            current_time = time.time()
+            if current_time - self.last_satisfaction_summary < self.SATISFACTION_SUMMARY_INTERVAL:
+                return
+                
+            # Filtra dados dos últimos 5 minutos
+            recent_data = [entry for entry in self.satisfaction_history 
+                          if current_time - entry['timestamp'] < 300]  # 5 minutos
+            
+            if not recent_data:
+                return
+                
+            # Calcula estatísticas
+            scores = [entry['score'] for entry in recent_data]
+            classes = [entry['class'] for entry in recent_data]
+            
+            avg_score = sum(scores) / len(scores)
+            
+            # Conta classificações
+            class_count = {}
+            for cls in classes:
+                class_count[cls] = class_count.get(cls, 0) + 1
+                
+            # Encontra classificação dominante
+            dominant_class = max(class_count, key=class_count.get)
+            
+            logger.info("📈" * 15)
+            logger.info("📊 RESUMO DE SATISFAÇÃO (Últimos 5 min)")
+            logger.info("📈" * 15)
+            logger.info(f"📊 Total de medições: {len(recent_data)}")
+            logger.info(f"🎯 Score médio: {avg_score:.1f}/100")
+            logger.info(f"🏆 Classificação dominante: {dominant_class}")
+            logger.info("-" * 40)
+            for cls, count in class_count.items():
+                percentage = (count / len(recent_data)) * 100
+                logger.info(f"   {cls}: {count} ({percentage:.1f}%)")
+            logger.info("📈" * 15)
+            
+            self.last_satisfaction_summary = current_time
+            
+        except Exception as e:
+            logger.error(f"[SATISFACTION] Erro no resumo: {str(e)}")
 
     def _check_engagement(self, section_id, distance, move_speed):
         # Engajamento: basta a última leitura ser válida
@@ -1434,9 +1484,54 @@ class SerialRadarManager:
                 satisfaction_score, satisfaction_class = satisfaction_result
                 converted_data['satisfaction_score'] = satisfaction_score
                 converted_data['satisfaction_class'] = satisfaction_class
+                
+                # Removido: estatísticas de satisfação
+                
+                # FORMATAÇÃO LIMPA E COMPLETA - UM DADO POR LINHA
+                logger.info("=" * 60)
+                logger.info("📊 ANÁLISE COMPLETA DO CLIENTE")
+                logger.info("=" * 60)
+                
+                # Posição
+                logger.info(f"📍 Posição X: {data.get('x_point', 0):.2f} m")
+                logger.info(f"📍 Posição Y: {data.get('y_point', 0):.2f} m") 
+                logger.info(f"📏 Distância: {distance:.2f} m")
+                
+                # Movimento
+                logger.info(f"🏃 Velocidade: {move_speed:.1f} cm/s")
+                
+                # Dados vitais
+                logger.info(f"💓 Batimentos: {heart_rate:.1f} bpm")
+                logger.info(f"🫁 Respiração: {breath_rate:.1f} rpm")
+                
+                # Satisfação
+                emoji_map = {
+                    "MUITO_POSITIVA": "😍",
+                    "POSITIVA": "😊", 
+                    "NEUTRA": "😐",
+                    "NEGATIVA": "😞",
+                    "MUITO_NEGATIVA": "😡"
+                }
+                emoji = emoji_map.get(satisfaction_class, "❓")
+                logger.info(f"🎯 Satisfação: {emoji} {satisfaction_class} ({satisfaction_score:.0f}/100)")
+                
+                # Engajamento e localização
+                is_engaged = self._check_engagement(section['section_id'] if section else None, distance, move_speed)
+                engagement_emoji = "🔥" if is_engaged else "💤"
+                engagement_text = "ENGAJADO" if is_engaged else "NÃO ENGAJADO"
+                logger.info(f"{engagement_emoji} Engajamento: {engagement_text}")
+                
+                if section:
+                    logger.info(f"🏪 Seção: {section.get('section_name', 'N/A')} (ID: {section.get('section_id', 'N/A')})")
+                    logger.info(f"📦 Produto: {section.get('product_id', 'N/A')}")
+                else:
+                    logger.info("🏪 Seção: Não identificada")
+                
+                logger.info("=" * 60)
             else:
                 converted_data['satisfaction_score'] = None
                 converted_data['satisfaction_class'] = None
+                logger.info("⚠️ Dados vitais insuficientes para análise de satisfação")
             
             # Verifica engajamento
             converted_data['is_engaged'] = self._check_engagement(
@@ -1579,6 +1674,9 @@ breath_rate: 15.0"""
                 logger.info(f"📊 [STATUS] Mensagens: Recebidas={radar_manager.messages_received}, Processadas={radar_manager.messages_processed}, Falharam={radar_manager.messages_failed}")
                 logger.info(f"📊 [STATUS] Conexão serial: {'✅ Ativa' if radar_manager.serial_connection and radar_manager.serial_connection.is_open else '❌ Inativa'}")
                 logger.info(f"📊 [STATUS] Thread de recepção: {'✅ Ativa' if radar_manager.receive_thread and radar_manager.receive_thread.is_alive() else '❌ Inativa'}")
+                
+                # Mostra resumo de satisfação periodicamente
+                radar_manager._show_satisfaction_summary()
             
     except KeyboardInterrupt:
         logger.info("🔄 Encerrando por interrupção do usuário...")
