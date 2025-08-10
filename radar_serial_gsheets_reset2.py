@@ -45,7 +45,8 @@ RANGE_STEP = 2.5
 class GoogleSheetsManager:
     def __init__(self, creds_path, spreadsheet_name, worksheet_name='Sheet1'):
         SCOPES = [
-            'https://www.googleapis.com/auth/spreadsheets'
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive.readonly'
         ]
         
         try:
