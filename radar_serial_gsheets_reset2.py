@@ -18,7 +18,7 @@ import sys
 
 # Paths absolutos para SystemD
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CREDENTIALS_PATH = os.path.join(SCRIPT_DIR, 'credenciais.json')
+CREDENTIALS_PATH = os.path.join(SCRIPT_DIR, 'credenciais2.json')
 ENV_FILE_PATH = os.path.join(SCRIPT_DIR, '.env')
 
 # Configuração básica de logging
@@ -45,9 +45,7 @@ RANGE_STEP = 2.5
 class GoogleSheetsManager:
     def __init__(self, creds_path, spreadsheet_name, worksheet_name='Sheet1'):
         SCOPES = [
-            'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive',
-            'https://www.googleapis.com/auth/drive.file'
+            'https://www.googleapis.com/auth/spreadsheets'
         ]
         
         try:
@@ -1022,11 +1020,7 @@ class SerialRadarManager:
                     self.hardware_reset_arduino()
                     self.last_valid_data_time = current_time
 
-                # Limpeza periódica de memória
-                current_time = time.time()
-                if current_time - self.last_memory_cleanup > self.MEMORY_CLEANUP_INTERVAL:
-                    self._cleanup_memory()
-                    self.last_memory_cleanup = current_time
+                # Limpeza periódica de memória - REMOVIDO para SystemD
                 
                 if time.time() - last_data_time > 30:
                     logger.warning("⚠️ Nenhum dado ou heartbeat recebido nos últimos 30 segundos")
@@ -1463,7 +1457,7 @@ def main():
     
     try:
         # Usar path absoluto otimizado
-        gsheets_manager = GoogleSheetsManager(CREDENTIALS_PATH, 'codigo_rasp')
+        gsheets_manager = GoogleSheetsManager(CREDENTIALS_PATH, 'Projeto_cocacola')
         logger.info("✅ Google Sheets conectado")
         
     except Exception as e:
