@@ -907,9 +907,9 @@ class SerialRadarManager:
                             # Dados simulados - aviso
                             elif 'DADOS SIMULADOS' in line or '🎭' in line:
                                 logger.warning(f"🎭 [SIM] Dados simulados detectados")
-                            # Debug e heartbeat - silencioso
-                            elif any(debug in line for debug in ['DEBUG', 'HEARTBEAT', 'Tentativa', 'Falha na', '===', '🔍']):
-                                logger.debug(f"[DEBUG] {line.strip()}")
+                            # Debug e mensagens do Arduino - silencioso
+                            elif any(debug in line for debug in ['DEBUG', 'HEARTBEAT', 'Tentativa', 'Falha na', '===', '🔍', 'TENTATIVA ROBUSTA', 'falharam', 'usando dados simulados', 'CRÍTICO', 'Problema sério']):
+                                logger.debug(f"[ARDUINO-DEBUG] {line.strip()}")
                             # Erros críticos - importante
                             elif any(critical in line for critical in ['CRÍTICO', 'FALHOU', 'ERROR', '❌']):
                                 logger.warning(f"⚠️ {line.strip()}")
@@ -1030,8 +1030,13 @@ class SerialRadarManager:
                             logger.warning("😴 [SERIAL] Sensor MR60BHA2 em modo inativo - aguardando ativação")
                             continue
                         
-                        # Ignora linhas de debug simulado
-                        if 'DADOS SIMULADOS' in line:
+                        # Ignora mensagens de debug verboso do Arduino
+                        if any(ignore in line for ignore in [
+                            'DADOS SIMULADOS', 'Método robusto falhou', 'usando dados simulados', 
+                            'TENTATIVA ROBUSTA', 'Todas as tentativas falharam', 'Tentativa', 'Falha na',
+                            'CRÍTICO: Posição E dados vitais falharam', 'Problema sério de comunicação',
+                            'DEBUG DADOS VITAIS', 'FIM DEBUG VITAIS', 'DEBUG POSIÇÃO'
+                        ]):
                             continue
                         
                         # Detecta se ESP32 entrou em modo download
