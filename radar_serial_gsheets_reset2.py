@@ -136,7 +136,113 @@ def parse_serial_data(raw_data):
     try:
         # Suporte para múltiplos formatos de dados do Arduino
         
-        # FORMATO 1: Formato simples (send_formatted_data)
+        # FORMATO 1: Formato atual do radar (Human Detected + Target)
+        # -----Human Detected-----
+        # breath_rate: 30.00
+        # heart_rate: 82.00
+        # x_position: -0.15
+        # y_position: 0.38
+        # distance: -0.00
+        # Target 1:
+        #   x_point: -0.15
+        #   y_point: 0.38
+        #   dop_index: 0
+        #   cluster_index: 0
+        #   move_speed: 0.00 cm/s
+        has_human_detected = '-----Human Detected-----' in raw_data
+        has_target_1 = 'Target 1:' in raw_data
+        
+        if has_human_detected and has_target_1:
+            logger.debug("📡 [PARSER] Detectado formato atual do radar (Human Detected + Target)")
+            
+            # Padrões regex para todos os campos solicitados
+            x_position_pattern = r'x_position\s*:\s*([-+]?\d*\.?\d+)'
+            y_position_pattern = r'y_position\s*:\s*([-+]?\d*\.?\d+)'
+            x_point_pattern = r'x_point\s*:\s*([-+]?\d*\.?\d+)'
+            y_point_pattern = r'y_point\s*:\s*([-+]?\d*\.?\d+)'
+            breath_rate_pattern = r'breath_rate\s*:\s*([-+]?\d*\.?\d+)'
+            heart_rate_pattern = r'heart_rate\s*:\s*([-+]?\d*\.?\d+)'
+            distance_pattern = r'distance\s*:\s*([-+]?\d*\.?\d+)'
+            move_speed_pattern = r'move_speed\s*:\s*([-+]?\d*\.?\d+)\s*cm/s'
+            dop_index_pattern = r'dop_index\s*:\s*([-+]?\d+)'
+            cluster_index_pattern = r'cluster_index\s*:\s*(\d+)'
+            
+            # Busca por todos os campos
+            x_position_match = re.search(x_position_pattern, raw_data, re.IGNORECASE)
+            y_position_match = re.search(y_position_pattern, raw_data, re.IGNORECASE)
+            x_point_match = re.search(x_point_pattern, raw_data, re.IGNORECASE)
+            y_point_match = re.search(y_point_pattern, raw_data, re.IGNORECASE)
+            breath_rate_match = re.search(breath_rate_pattern, raw_data, re.IGNORECASE)
+            heart_rate_match = re.search(heart_rate_pattern, raw_data, re.IGNORECASE)
+            distance_match = re.search(distance_pattern, raw_data, re.IGNORECASE)
+            move_speed_match = re.search(move_speed_pattern, raw_data, re.IGNORECASE)
+            dop_index_match = re.search(dop_index_pattern, raw_data, re.IGNORECASE)
+            cluster_index_match = re.search(cluster_index_pattern, raw_data, re.IGNORECASE)
+            
+            # Prioriza x_point/y_point se disponíveis, senão usa x_position/y_position
+            x_coord = None
+            y_coord = None
+            
+            if x_point_match and y_point_match:
+                x_coord = float(x_point_match.group(1))
+                y_coord = float(y_point_match.group(1))
+                logger.debug(f"📡 [PARSER] Usando coordenadas do Target: x={x_coord}, y={y_coord}")
+            elif x_position_match and y_position_match:
+                x_coord = float(x_position_match.group(1))
+                y_coord = float(y_position_match.group(1))
+                logger.debug(f"📡 [PARSER] Usando coordenadas de posição: x={x_coord}, y={y_coord}")
+            
+            if x_coord is not None and y_coord is not None:
+                # Extrai velocidade (move_speed em cm/s, converte para m/s)
+                move_speed = 0.0
+                if move_speed_match:
+                    move_speed = float(move_speed_match.group(1)) / 100.0  # cm/s para m/s
+                    logger.debug(f"📡 [PARSER] Velocidade detectada: {move_speed} m/s")
+                
+                # Extrai dados vitais
+                breath_rate = 15.0  # Valor padrão
+                if breath_rate_match:
+                    breath_rate = float(breath_rate_match.group(1))
+                    logger.debug(f"📡 [PARSER] Taxa de respiração: {breath_rate}")
+                
+                heart_rate = 75.0  # Valor padrão
+                if heart_rate_match:
+                    heart_rate = float(heart_rate_match.group(1))
+                    logger.debug(f"📡 [PARSER] Frequência cardíaca: {heart_rate}")
+                
+                # Extrai distância
+                distance = None
+                if distance_match:
+                    distance = float(distance_match.group(1))
+                    logger.debug(f"📡 [PARSER] Distância: {distance}")
+                
+                # Calcula distância se não fornecida ou se for inválida
+                if distance is None or distance <= 0:
+                    distance = math.sqrt(x_coord**2 + y_coord**2)
+                    logger.debug(f"📡 [PARSER] Distância calculada: {distance}")
+                
+                # Extrai índices
+                dop_index = int(dop_index_match.group(1)) if dop_index_match else 0
+                cluster_index = int(cluster_index_match.group(1)) if cluster_index_match else 0
+                
+                data = {
+                    'x_point': x_coord,
+                    'y_point': y_coord,
+                    'breath_rate': breath_rate,
+                    'heart_rate': heart_rate,
+                    'distance': distance,
+                    'move_speed': move_speed,
+                    'dop_index': dop_index,
+                    'cluster_index': cluster_index,
+                    'total_phase': 0.0,  # Não disponível no formato atual
+                    'breath_phase': 0.0,  # Não disponível no formato atual
+                    'heart_phase': 0.0    # Não disponível no formato atual
+                }
+                
+                logger.info(f"✅ [PARSER] Dados parseados: X={x_coord:.2f}m, Y={y_coord:.2f}m, ❤️{heart_rate:.0f}, 🫁{breath_rate:.0f}, 🏃{move_speed:.2f}m/s")
+                return data
+        
+        # FORMATO 2: Formato simples (send_formatted_data)
         # breath_rate: 15.00
         # heart_rate: 75.00  
         # x_position: 0.50
@@ -163,69 +269,6 @@ def parse_serial_data(raw_data):
                     'breath_phase': 0.0,
                     'heart_phase': 0.0
                 }
-                return data
-        
-        # FORMATO 2: Formato completo (Human Detected + Target)
-        # -----Human Detected-----
-        # Target 1:
-        # ...dados...
-        has_human_detected = '-----Human Detected-----' in raw_data
-        has_target_1 = 'Target 1:' in raw_data
-        
-        if has_human_detected and has_target_1:
-            logger.debug("📡 [PARSER] Detectado formato completo do Arduino")
-            
-            # Padrões regex melhorados para o novo formato
-            x_pattern = r'x_point\s*:\s*([-+]?\d*\.?\d+)'
-            y_pattern = r'y_point\s*:\s*([-+]?\d*\.?\d+)'
-            dop_pattern = r'dop_index\s*:\s*([-+]?\d+)'
-            cluster_pattern = r'cluster_index\s*:\s*(\d+)'
-            speed_pattern = r'move_speed\s*:\s*([-+]?\d*\.?\d+)\s*cm/s'
-            total_phase_pattern = r'total_phase\s*:\s*([-+]?\d*\.?\d+)'
-            breath_phase_pattern = r'breath_phase\s*:\s*([-+]?\d*\.?\d+)'
-            heart_phase_pattern = r'heart_phase\s*:\s*([-+]?\d*\.?\d+)'
-            breath_rate_pattern = r'breath_rate\s*:\s*([-+]?\d*\.?\d+)'
-            heart_rate_pattern = r'heart_rate\s*:\s*([-+]?\d*\.?\d+)'
-            distance_pattern = r'distance\s*:\s*([-+]?\d*\.?\d+)'
-            
-            x_match = re.search(x_pattern, raw_data, re.IGNORECASE)
-            y_match = re.search(y_pattern, raw_data, re.IGNORECASE)
-            dop_match = re.search(dop_pattern, raw_data, re.IGNORECASE)
-            cluster_match = re.search(cluster_pattern, raw_data, re.IGNORECASE)
-            speed_match = re.search(speed_pattern, raw_data, re.IGNORECASE)
-            total_phase_match = re.search(total_phase_pattern, raw_data, re.IGNORECASE)
-            breath_phase_match = re.search(breath_phase_pattern, raw_data, re.IGNORECASE)
-            heart_phase_match = re.search(heart_phase_pattern, raw_data, re.IGNORECASE)
-            breath_rate_match = re.search(breath_rate_pattern, raw_data, re.IGNORECASE)
-            heart_rate_match = re.search(heart_rate_pattern, raw_data, re.IGNORECASE)
-            distance_match = re.search(distance_pattern, raw_data, re.IGNORECASE)
-            
-            if x_match and y_match:
-                data = {
-                    'x_point': float(x_match.group(1)),
-                    'y_point': float(y_match.group(1)),
-                    'dop_index': int(dop_match.group(1)) if dop_match else 0,
-                    'cluster_index': int(cluster_match.group(1)) if cluster_match else 0,
-                    'move_speed': float(speed_match.group(1))/100 if speed_match else 0.0,
-                    'total_phase': float(total_phase_match.group(1)) if total_phase_match else 0.0,
-                    'breath_phase': float(breath_phase_match.group(1)) if breath_phase_match else 0.0,
-                    'heart_phase': float(heart_phase_match.group(1)) if heart_phase_match else 0.0,
-                    'breath_rate': float(breath_rate_match.group(1)) if breath_rate_match else None,
-                    'heart_rate': float(heart_rate_match.group(1)) if heart_rate_match else None,
-                    'distance': float(distance_match.group(1)) if distance_match else None
-                }
-                
-                # Calcula distância se não fornecida
-                if data['distance'] is None:
-                    data['distance'] = math.sqrt(data['x_point']**2 + data['y_point']**2)
-                
-                # Valores padrão para dados vitais se não fornecidos
-                if data['heart_rate'] is None:
-                    data['heart_rate'] = 75.0
-                
-                if data['breath_rate'] is None:
-                    data['breath_rate'] = 15.0
-                
                 return data
         
         # FORMATO 3: Mensagens do sistema (não processa dados, só registra)
@@ -882,6 +925,20 @@ class SerialRadarManager:
                         
                         # === DETECÇÃO DE DADOS DO ARDUINO (PRIORIDADE MÁXIMA) ===
                         
+                        # FORMATO 1: JSON do Arduino (formato atual)
+                        # {"radar_id":"RADAR_1","timestamp_ms":12345,"person_count":1,"active_people":[{"x_pos":0.5,"y_pos":1.2,"distance_raw":1.3,"confidence":85}]}
+                        if line.strip().startswith('{') and line.strip().endswith('}'):
+                            try:
+                                import json
+                                json_data = json.loads(line.strip())
+                                if 'active_people' in json_data and json_data.get('person_count', 0) > 0:
+                                    logger.debug(f"🎯 JSON detectado: {line.strip()}")
+                                    self.process_radar_data(line.strip())
+                                    self.last_valid_data_time = time.time()
+                                    continue
+                            except (json.JSONDecodeError, ImportError):
+                                pass  # Não é JSON válido, continua para outros formatos
+                        
                         # Formato simples: linhas individuais de dados
                         if any(key in line for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
                             if not coletando_bloco:
@@ -1239,82 +1296,15 @@ class SerialRadarManager:
         return False
 
     def process_radar_data(self, raw_data):
-        # Novo parser para o formato melhorado do Arduino
-        def parse_radar_text_block(text):
-            lines = text.strip().split('\n')
-            data = {}
-            
-            # Novo formato: dados simples com chave: valor
-            for line in lines:
-                if ':' in line:
-                    key, value = line.split(':', 1)
-                    key = key.strip().lower().replace(' ', '_')
-                    value = value.strip().replace(' cm/s', '')
-                    
-                    try:
-                        data[key] = float(value)
-                    except ValueError:
-                        try:
-                            data[key] = int(value)
-                        except ValueError:
-                            data[key] = value
-            
-            # Mapeia os novos nomes de campos
-            return {
-                'x_point': data.get('x_position', data.get('x_point', 0)),
-                'y_point': data.get('y_position', data.get('y_point', 0)),
-                'move_speed': data.get('move_speed', 0),
-                'heart_rate': data.get('heart_rate', None),
-                'breath_rate': data.get('breath_rate', None),
-                'distance': data.get('distance', 0),
-                'dop_index': data.get('dop_index', 0),
-                'total_phase': data.get('total_phase', 0),
-                'breath_phase': data.get('breath_phase', 0),
-                'heart_phase': data.get('heart_phase', 0),
-                'cluster_index': data.get('cluster_index', 0),
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
+        # Usa o parser atualizado que suporta múltiplos formatos incluindo JSON
+        data = parse_serial_data(raw_data)
         
-        # Detecta múltiplos formatos de dados do Arduino
-        if '-----Human Detected-----' in raw_data or any(key in raw_data for key in ['breath_rate:', 'x_position:']):
-            # Usa o parser atualizado que suporta múltiplos formatos
-            data = parse_serial_data(raw_data)
+        if data is None:
+            logger.warning(f"❌ [PROCESS] Parser retornou None para: {raw_data[:200]}...")
+            return
             
-            if data is None:
-                logger.warning(f"❌ [PROCESS] Parser retornou None para: {raw_data[:200]}...")
-                return
-                
-            # Marca como dados reais (sem simulação automática)
-            data['is_simulated'] = False
-        else:
-            # Tenta JSON ou parser antigo
-            try:
-                import json
-                json_obj = json.loads(raw_data)
-                if 'active_people' in json_obj and json_obj['active_people']:
-                    person = json_obj['active_people'][0]
-                    data = {
-                        'x_point': float(person.get('x_pos', 0)),
-                        'y_point': float(person.get('y_pos', 0)),
-                        'distance': float(person.get('distance_raw', 0)),
-                        'confidence': float(person.get('confidence', 0)),
-                        'move_speed': 0.0,
-                        'heart_rate': None,
-                        'breath_rate': None,
-                        'dop_index': 0,
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'is_simulated': False
-                    }
-                else:
-                    logger.warning('[PROCESS] JSON recebido não contém pessoa ativa.')
-                    return
-            except Exception:
-                data = parse_serial_data(raw_data)
-                if not data:
-                    logger.warning(f"❌ [PROCESS] Mensagem falhou no parse! Total de falhas: {self.messages_failed}")
-                    self.messages_failed += 1
-                    return
-                data['is_simulated'] = False
+        # Marca como dados reais (sem simulação automática)
+        data['is_simulated'] = False
         
         self.messages_processed += 1
         
@@ -1396,8 +1386,6 @@ class SerialRadarManager:
                 satisfaction_score, satisfaction_class = satisfaction_result
                 converted_data['satisfaction_score'] = satisfaction_score
                 converted_data['satisfaction_class'] = satisfaction_class
-                
-                # Removido: estatísticas de satisfação
                 
                 # Log simplificado para SystemD
                 emoji_map = {
