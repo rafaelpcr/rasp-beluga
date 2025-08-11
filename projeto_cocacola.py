@@ -116,20 +116,20 @@ class GoogleSheetsManager:
     def insert_radar_data(self, data):
         try:
             row = [
-                data.get('radar_id', 'N/A'),  # Identificador do radar
-                data.get('session_id'),
-                data.get('timestamp'),
-                data.get('x_point'),
-                data.get('y_point'),
-                data.get('move_speed'),
-                data.get('heart_rate'),
-                data.get('breath_rate'),
-                data.get('distance'),
-                data.get('section_id'),
-                data.get('product_id'),
-                data.get('satisfaction_score'),
-                data.get('satisfaction_class'),
-                data.get('is_engaged')
+                data.get('radar_id', 'N/A'),      # A: Identificador do radar
+                data.get('session_id', ''),       # B: ID da sessão
+                data.get('timestamp', ''),        # C: Timestamp
+                data.get('x_point', 0),          # D: Posição X
+                data.get('y_point', 0),          # E: Posição Y
+                data.get('move_speed', 0),       # F: Velocidade
+                data.get('heart_rate', 0),       # G: Frequência cardíaca
+                data.get('breath_rate', 0),      # H: Taxa de respiração
+                data.get('distance', 0),         # I: Distância
+                data.get('section_id', ''),      # J: ID da seção
+                data.get('product_id', ''),      # K: ID do produto
+                data.get('satisfaction_score', ''), # L: Score de satisfação
+                data.get('satisfaction_class', ''), # M: Classe de satisfação
+                data.get('is_engaged', False)    # N: Se está engajado
             ]
             
             # Verificar se há valores None ou problemáticos
@@ -662,7 +662,8 @@ class DualRadarManager:
 
     def _generate_session_id(self, radar_id):
         """Gera um novo ID de sessão para um radar específico"""
-        return f"{radar_id}_{str(uuid.uuid4())}"
+        # Gera UUID único sem o prefixo do radar para evitar duplicação
+        return str(uuid.uuid4())
 
     def _check_session_timeout(self, radar_id):
         """Verifica se a sessão atual de um radar expirou"""
@@ -714,43 +715,107 @@ class DualRadarManager:
     def find_serial_ports(self):
         """Detecta automaticamente portas seriais disponíveis para ambos os radares"""
         try:
-            import serial.tools.list_ports
+            # Tenta importar serial.tools.list_ports
+            try:
+                import serial.tools.list_ports
+                logger.info("🔍 Buscando portas seriais disponíveis para dois radares...")
+                ports = list(serial.tools.list_ports.comports())
+                
+                if not ports:
+                    logger.error("❌ Nenhuma porta serial encontrada!")
+                    return False
+                
+                logger.info(f"📋 {len(ports)} porta(s) encontrada(s):")
+                
+                # Lista todas as portas para debug
+                for i, port in enumerate(ports):
+                    logger.info(f"   {i+1}. {port.device}")
+                    logger.info(f"      Descrição: {port.description}")
+                    if hasattr(port, 'manufacturer') and port.manufacturer:
+                        logger.info(f"      Fabricante: {port.manufacturer}")
+                
+                # Filtra portas válidas (exclui Bluetooth e debug console)
+                valid_ports = []
+                for port in ports:
+                    device_lower = str(port.device).lower()
+                    desc_lower = str(port.description).lower()
+                    
+                    # Evita portas Bluetooth e debug console
+                    if not any(skip in device_lower or skip in desc_lower for skip in 
+                              ['bluetooth', 'debug-console', 'incoming-port']):
+                        valid_ports.append(port)
+                
+                if len(valid_ports) < 2:
+                    logger.error(f"❌ Apenas {len(valid_ports)} porta(s) válida(s) encontrada(s). São necessárias 2 portas para dois radares.")
+                    return False
+                
+                # Atribui portas aos radares
+                for i, config in enumerate(self.radar_configs):
+                    if i < len(valid_ports):
+                        config['port'] = valid_ports[i].device
+                        logger.info(f"✅ {config['id']} ({config['description']}) atribuído à porta: {config['port']}")
+                    else:
+                        logger.error(f"❌ Não há portas suficientes para {config['id']}")
+                        return False
+                
+                return True
+                
+            except ImportError:
+                # Fallback: detecta portas manualmente (Linux/Raspberry Pi)
+                logger.warning("⚠️ serial.tools.list_ports não disponível, usando detecção manual...")
+                return self._find_serial_ports_manual()
+                
+        except Exception as e:
+            logger.error(f"❌ Erro na detecção de portas: {str(e)}")
+            return False
+
+    def _find_serial_ports_manual(self):
+        """Detecção manual de portas seriais para sistemas sem serial.tools"""
+        try:
+            import glob
+            import os
             
-            logger.info("🔍 Buscando portas seriais disponíveis para dois radares...")
-            ports = list(serial.tools.list_ports.comports())
+            logger.info("🔍 Detecção manual de portas seriais...")
             
-            if not ports:
+            # Padrões comuns de portas seriais no Linux/Raspberry Pi
+            port_patterns = [
+                '/dev/ttyUSB*',      # USB-Serial
+                '/dev/ttyACM*',      # Arduino/ESP32
+                '/dev/ttyS*',        # Serial padrão
+                '/dev/ttyAMA*'       # Raspberry Pi GPIO
+            ]
+            
+            all_ports = []
+            for pattern in port_patterns:
+                ports = glob.glob(pattern)
+                all_ports.extend(ports)
+            
+            if not all_ports:
                 logger.error("❌ Nenhuma porta serial encontrada!")
                 return False
             
-            logger.info(f"📋 {len(ports)} porta(s) encontrada(s):")
-            
-            # Lista todas as portas para debug
-            for i, port in enumerate(ports):
-                logger.info(f"   {i+1}. {port.device}")
-                logger.info(f"      Descrição: {port.description}")
-                if hasattr(port, 'manufacturer') and port.manufacturer:
-                    logger.info(f"      Fabricante: {port.manufacturer}")
-            
-            # Filtra portas válidas (exclui Bluetooth e debug console)
+            # Filtra portas válidas
             valid_ports = []
-            for port in ports:
-                device_lower = str(port.device).lower()
-                desc_lower = str(port.description).lower()
-                
-                # Evita portas Bluetooth e debug console
-                if not any(skip in device_lower or skip in desc_lower for skip in 
-                          ['bluetooth', 'debug-console', 'incoming-port']):
-                    valid_ports.append(port)
+            for port in all_ports:
+                try:
+                    # Verifica se a porta pode ser aberta
+                    if os.access(port, os.R_OK | os.W_OK):
+                        valid_ports.append(port)
+                        logger.info(f"   ✅ Porta válida: {port}")
+                    else:
+                        logger.debug(f"   ⚠️ Porta sem permissão: {port}")
+                except Exception as e:
+                    logger.debug(f"   ⚠️ Porta inacessível: {port} - {e}")
             
             if len(valid_ports) < 2:
                 logger.error(f"❌ Apenas {len(valid_ports)} porta(s) válida(s) encontrada(s). São necessárias 2 portas para dois radares.")
+                logger.info("💡 Dica: Conecte dois dispositivos USB ou verifique permissões das portas")
                 return False
             
             # Atribui portas aos radares
             for i, config in enumerate(self.radar_configs):
                 if i < len(valid_ports):
-                    config['port'] = valid_ports[i].device
+                    config['port'] = valid_ports[i]
                     logger.info(f"✅ {config['id']} ({config['description']}) atribuído à porta: {config['port']}")
                 else:
                     logger.error(f"❌ Não há portas suficientes para {config['id']}")
@@ -759,7 +824,7 @@ class DualRadarManager:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Erro na detecção de portas: {str(e)}")
+            logger.error(f"❌ Erro na detecção manual de portas: {str(e)}")
             return False
 
     def connect_radar(self, radar_id):
@@ -1099,20 +1164,24 @@ class DualRadarManager:
         dop_index = data.get('dop_index', 0) if 'dop_index' in data else 0
         move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else data.get('move_speed', 0)
         
+        # Formata timestamp corretamente
+        current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
         converted_data = {
-            'session_id': self.current_session_ids[radar_id],
             'radar_id': radar_id,  # Identificador do radar
-            'x_point': data.get('x_point', 0),
-            'y_point': data.get('y_point', 0),
-            'move_speed': move_speed,
-            'distance': distance,
-            'dop_index': dop_index,
-            'heart_rate': heart_rate,
-            'breath_rate': breath_rate,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'session_id': self.current_session_ids[radar_id],
+            'timestamp': current_timestamp,
+            'x_point': round(float(data.get('x_point', 0)), 3),
+            'y_point': round(float(data.get('y_point', 0)), 3),
+            'move_speed': round(float(move_speed), 2),
+            'heart_rate': int(heart_rate) if heart_rate is not None else 0,
+            'breath_rate': round(float(breath_rate), 1) if breath_rate is not None else 0.0,
+            'distance': round(float(distance), 2),
+            'dop_index': int(dop_index) if dop_index is not None else 0,
             'is_simulated': data.get('is_simulated', False)
         }
         
+        # Determina seção e produto
         section = shelf_manager.get_section_at_position(
             converted_data['x_point'],
             converted_data['y_point'],
@@ -1120,17 +1189,19 @@ class DualRadarManager:
         )
         
         if section:
-            converted_data['section_id'] = section['section_id']
-            converted_data['product_id'] = section['product_id']
+            converted_data['section_id'] = int(section['section_id'])
+            converted_data['product_id'] = str(section['product_id'])
             
-            # Calcula satisfação apenas se tiver dados vitais
-            if heart_rate is not None and breath_rate is not None:
+            # Calcula satisfação apenas se tiver dados vitais válidos
+            if (heart_rate is not None and heart_rate > 0 and 
+                breath_rate is not None and breath_rate > 0):
+                
                 satisfaction_result = self.analytics_manager.calculate_satisfaction_score(
                     move_speed, heart_rate, breath_rate, distance
                 )
                 satisfaction_score, satisfaction_class = satisfaction_result
-                converted_data['satisfaction_score'] = satisfaction_score
-                converted_data['satisfaction_class'] = satisfaction_class
+                converted_data['satisfaction_score'] = int(satisfaction_score)
+                converted_data['satisfaction_class'] = str(satisfaction_class)
                 
                 # Log simplificado para SystemD
                 emoji_map = {
@@ -1143,9 +1214,7 @@ class DualRadarManager:
                 emoji = emoji_map.get(satisfaction_class, "❓")
                 
                 logger.info(f"📊 [{radar_id}] Análise: {emoji} {satisfaction_class} ({satisfaction_score:.0f}/100) | Dist: {distance:.1f}m | Vel: {move_speed:.0f}cm/s")
-                
-                if section:
-                    logger.info(f"🏪 [{radar_id}] {section.get('section_name', 'N/A')} | 📦 {section.get('product_id', 'N/A')}")
+                logger.info(f"🏪 [{radar_id}] {section.get('section_name', 'N/A')} | 📦 {section.get('product_id', 'N/A')}")
             else:
                 converted_data['satisfaction_score'] = None
                 converted_data['satisfaction_class'] = None
