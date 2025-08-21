@@ -1146,6 +1146,10 @@ class DualRadarManager:
         
         x = data.get('x_point', 0)
         y = data.get('y_point', 0)
+        # Se X/Y vieram zerados, logar o bloco bruto para diagnóstico
+        if (abs(x) < 1e-6 and abs(y) < 1e-6):
+            snippet = raw_data if len(raw_data) < 600 else raw_data[:600] + "..."
+            logger.warning(f"🕵️ [{radar_id}] X/Y zerados. Bloco bruto recebido:\n{snippet}")
         move_speed = abs(data.get('dop_index', 0) * RANGE_STEP) if 'dop_index' in data else data.get('move_speed', 0)
         
         if self._is_new_person(radar_id, x, y, move_speed):
