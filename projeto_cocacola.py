@@ -986,6 +986,9 @@ class DualRadarManager:
         """Loop de recepção de dados para um radar específico"""
         buffer = ""
         last_data_time = time.time()
+        # Controle de blocos completos vindos do radar
+        message_mode = False
+        message_buffer = ""
         
         while self.is_running:
             try:
@@ -1009,34 +1012,33 @@ class DualRadarManager:
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip('\r')
-                        
-                        if line.strip():
-                            # Processa dados do radar
-                            if any(key in line for key in ['breath_rate', 'heart_rate', 'x_position', 'y_position', 'Human Detected', 'Target']):
-                                logger.debug(f"🎯 [{radar_id}] Dados: {line.strip()}")
-                                self.process_radar_data(radar_id, line.strip())
-                                self.last_valid_data_times[radar_id] = time.time()
-                            # Logs de sistema
-                            elif any(critical in line for critical in ['CRÍTICO', 'FALHOU', 'ERROR', '❌']):
-                                logger.warning(f"⚠️ [{radar_id}] {line.strip()}")
-                            else:
-                                logger.debug(f"Debug [{radar_id}]: {line.strip()}")
-                        
-                        # Processa blocos de dados
-                        if '-----Human Detected-----' in line:
-                            # Inicia coleta de bloco
-                            bloco_buffer = line + "\n"
-                            while '\n' in buffer:
-                                line, buffer = buffer.split('\n', 1)
-                                line = line.strip('\r')
-                                if line.strip() == "":
-                                    # Fim do bloco
-                                    self.process_radar_data(radar_id, bloco_buffer)
-                                    self.last_valid_data_times[radar_id] = time.time()
-                                    break
-                                else:
-                                    bloco_buffer += line + "\n"
+
+                        if not line.strip():
                             continue
+
+                        # Início de um novo bloco de dados do radar
+                        if '-----Human Detected-----' in line:
+                            message_mode = True
+                            message_buffer = line + '\n'
+                            logger.debug(f"[SERIAL] Bloco iniciado em {radar_id}")
+                            continue
+
+                        # Continuação do bloco atual
+                        if message_mode:
+                            message_buffer += line + '\n'
+                            # Considera o bloco completo quando a linha "distance:" chegar
+                            if 'distance:' in line:
+                                self.process_radar_data(radar_id, message_buffer)
+                                self.last_valid_data_times[radar_id] = time.time()
+                                message_mode = False
+                                message_buffer = ""
+                            continue
+
+                        # Fora de bloco: apenas logs de sistema/diagnóstico
+                        if any(critical in line for critical in ['CRÍTICO', 'FALHOU', 'ERROR', '❌']):
+                            logger.warning(f"⚠️ [{radar_id}] {line.strip()}")
+                        else:
+                            logger.debug(f"Debug [{radar_id}]: {line.strip()}")
 
                 # Verifica timeout de dados
                 current_time = time.time()
