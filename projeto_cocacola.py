@@ -233,6 +233,10 @@ def parse_serial_data(raw_data):
                 logger.debug(f"📡 [PARSER] Usando coordenadas de posição: x={x_coord}, y={y_coord}")
             
             if x_coord is not None and y_coord is not None:
+                # Descartar blocos sem alvo com X/Y zerados
+                if not has_target_1 and abs(x_coord) < 1e-6 and abs(y_coord) < 1e-6:
+                    logger.debug("🧹 [PARSER] Bloco sem Target e X/Y=0 descartado")
+                    return None
                 # Extrai velocidade (move_speed em cm/s, converte para m/s)
                 move_speed = 0.0
                 if move_speed_match:
