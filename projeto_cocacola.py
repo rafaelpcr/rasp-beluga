@@ -1014,7 +1014,14 @@ class DualRadarManager:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip('\r')
 
+                        # Linha em branco pode indicar fim de bloco
                         if not line.strip():
+                            if message_mode and message_buffer:
+                                self.process_radar_data(radar_id, message_buffer)
+                                self.last_valid_data_times[radar_id] = time.time()
+                                message_mode = False
+                                message_buffer = ""
+                                seen_target_header = False
                             continue
 
                         # Início de um novo bloco de dados do radar
@@ -1023,17 +1030,27 @@ class DualRadarManager:
                             message_buffer = line + '\n'
                             seen_target_header = False
                             logger.debug(f"[SERIAL] Bloco iniciado em {radar_id}")
+                            self.last_valid_data_times[radar_id] = time.time()
                             continue
 
                         # Continuação do bloco atual
                         if message_mode:
                             message_buffer += line + '\n'
+                            # Atividade durante coleta de bloco
+                            self.last_valid_data_times[radar_id] = time.time()
                             # Marca quando começar a seção Target 1
                             if 'Target 1:' in line:
                                 seen_target_header = True
                             # Considera o bloco completo quando receber o último campo do alvo
                             # Em nossos dados, a última linha é "move_speed: ... cm/s"
                             if seen_target_header and 'move_speed' in line:
+                                self.process_radar_data(radar_id, message_buffer)
+                                self.last_valid_data_times[radar_id] = time.time()
+                                message_mode = False
+                                message_buffer = ""
+                                seen_target_header = False
+                            # Alternativa: alguns firmwares não enviam move_speed. Finaliza ao ver apenas vitais + distância
+                            elif (not seen_target_header) and ('distance:' in line):
                                 self.process_radar_data(radar_id, message_buffer)
                                 self.last_valid_data_times[radar_id] = time.time()
                                 message_mode = False
@@ -1051,7 +1068,7 @@ class DualRadarManager:
                 # Verifica timeout de dados
                 current_time = time.time()
                 if current_time - self.last_valid_data_times[radar_id] > self.RESET_TIMEOUT:
-                    logger.warning(f"⚠️ {radar_id}: Nenhum dado recebido por mais de 10 minutos. Executando reset...")
+                    logger.warning(f"⚠️ {radar_id}: Nenhum dado recebido por mais de {self.RESET_TIMEOUT} segundos. Executando reset...")
                     self.hardware_reset_radar(radar_id)
                     self.last_valid_data_times[radar_id] = current_time
 
