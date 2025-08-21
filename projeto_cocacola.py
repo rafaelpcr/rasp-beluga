@@ -989,6 +989,7 @@ class DualRadarManager:
         # Controle de blocos completos vindos do radar
         message_mode = False
         message_buffer = ""
+        seen_target_header = False
         
         while self.is_running:
             try:
@@ -1020,18 +1021,25 @@ class DualRadarManager:
                         if '-----Human Detected-----' in line:
                             message_mode = True
                             message_buffer = line + '\n'
+                            seen_target_header = False
                             logger.debug(f"[SERIAL] Bloco iniciado em {radar_id}")
                             continue
 
                         # Continuação do bloco atual
                         if message_mode:
                             message_buffer += line + '\n'
-                            # Considera o bloco completo quando a linha "distance:" chegar
-                            if 'distance:' in line:
+                            # Marca quando começar a seção Target 1
+                            if 'Target 1:' in line:
+                                seen_target_header = True
+                            # Considera o bloco completo quando receber o último campo do alvo
+                            # Em nossos dados, a última linha é "move_speed: ... cm/s"
+                            if seen_target_header and 'move_speed' in line:
                                 self.process_radar_data(radar_id, message_buffer)
                                 self.last_valid_data_times[radar_id] = time.time()
                                 message_mode = False
                                 message_buffer = ""
+                                seen_target_header = False
+                            # Fallback: se vier uma linha em branco (separador), finalize também
                             continue
 
                         # Fora de bloco: apenas logs de sistema/diagnóstico
