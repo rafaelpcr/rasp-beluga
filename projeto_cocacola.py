@@ -639,7 +639,9 @@ class DualRadarManager:
         # Configurações de sessão
         self.SESSION_TIMEOUT = 60  # 1 minuto para identificar novas pessoas
         self.last_valid_data_times = {}
-        self.RESET_TIMEOUT = 60  # 1 minuto
+        self.RESET_TIMEOUT = 300  # 5 minutos (tolerância a deep sleep)
+        self.DEEP_SLEEP_GRACE = 15  # segundos para tolerar quedas breves
+        self.reconnect_backoff = {cfg['id']: 1.0 for cfg in radar_configs}
         
         # Contadores para debug
         self.messages_received = {}
@@ -850,6 +852,12 @@ class DualRadarManager:
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE
             )
+            # Evita resets indesejados por DTR/RTS durante deep sleep
+            try:
+                serial_connection.dtr = True
+                serial_connection.rts = False
+            except Exception:
+                pass
             
             time.sleep(2)
             
@@ -1072,8 +1080,16 @@ class DualRadarManager:
                 # Verifica timeout de dados
                 current_time = time.time()
                 if current_time - self.last_valid_data_times[radar_id] > self.RESET_TIMEOUT:
-                    logger.warning(f"⚠️ {radar_id}: Nenhum dado recebido por mais de {self.RESET_TIMEOUT} segundos. Executando reset...")
-                    self.hardware_reset_radar(radar_id)
+                    connection = self.radar_connections.get(radar_id)
+                    if not connection or not connection.is_open:
+                        # Provável deep sleep: apenas aguarda reenumerar e faz backoff
+                        self.reconnect_backoff[radar_id] = min(self.reconnect_backoff[radar_id] * 2, 30.0)
+                        logger.warning(f"⚠️ {radar_id}: Porta ausente por deep sleep? Aguardando {self.reconnect_backoff[radar_id]:.1f}s e tentando reconectar...")
+                        time.sleep(self.reconnect_backoff[radar_id])
+                        self.connect_radar(radar_id)
+                    else:
+                        logger.warning(f"⚠️ {radar_id}: Nenhum dado por {self.RESET_TIMEOUT}s. Tentando reset de hardware...")
+                        self.hardware_reset_radar(radar_id)
                     self.last_valid_data_times[radar_id] = current_time
 
                 if time.time() - last_data_time > 30:
@@ -1083,8 +1099,17 @@ class DualRadarManager:
                 time.sleep(0.01)
                 
             except Exception as e:
-                logger.error(f"❌ [{radar_id}] Erro no loop de recepção: {str(e)}")
-                time.sleep(1)
+                err_msg = str(e)
+                logger.error(f"❌ [{radar_id}] Erro no loop de recepção: {err_msg}")
+                # Trata erros comuns de USB/Serial: desconectar e reconectar a porta
+                try:
+                    connection = self.radar_connections.get(radar_id)
+                    if connection and connection.is_open:
+                        connection.close()
+                except Exception:
+                    pass
+                time.sleep(1.0)
+                self.connect_radar(radar_id)
 
     def configure_sensor_continuous_mode(self, radar_id):
         """Configura sensor para modo contínuo - Adaptado para novo Arduino"""
