@@ -35,6 +35,7 @@ logging.getLogger('gspread').setLevel(logging.WARNING)
 
 # Carregar variáveis de ambiente do diretório correto
 load_dotenv(ENV_FILE_PATH)
+DEBUG_RADAR = os.getenv('DEBUG_RADAR', '0') not in ['0', 'false', 'False', None]
 
 SERIAL_CONFIG = {
     'baudrate': int(os.getenv('SERIAL_BAUDRATE', 115200))
@@ -174,6 +175,9 @@ class GoogleSheetsManager:
 
 def parse_serial_data(raw_data):
     try:
+        if DEBUG_RADAR:
+            dbg = raw_data if len(raw_data) < 600 else raw_data[:600] + '...'
+            logger.debug(f"[PARSER] raw=\n{dbg}")
         # Suporte para múltiplos formatos de dados do Arduino
         
         # FORMATO 1: Formato atual do radar (Human Detected + Target)
@@ -235,7 +239,8 @@ def parse_serial_data(raw_data):
             if x_coord is not None and y_coord is not None:
                 # Descartar blocos sem alvo com X/Y zerados
                 if not has_target_1 and abs(x_coord) < 1e-6 and abs(y_coord) < 1e-6:
-                    logger.debug("🧹 [PARSER] Bloco sem Target e X/Y=0 descartado")
+                    if DEBUG_RADAR:
+                        logger.debug("🧹 [PARSER] Bloco sem Target e X/Y=0 descartado")
                     return None
                 # Extrai velocidade (move_speed em cm/s, converte para m/s)
                 move_speed = 0.0
@@ -300,12 +305,18 @@ def parse_serial_data(raw_data):
             y_position_match = re.search(r'y_position\s*:\s*([-+]?\d*\.?\d+)', raw_data, re.IGNORECASE)
             
             if x_position_match and y_position_match:
+                x_pos = float(x_position_match.group(1))
+                y_pos = float(y_position_match.group(1))
+                # Evita enviar blocos sem alvo quando X/Y são ambos zero
+                if abs(x_pos) < 1e-6 and abs(y_pos) < 1e-6:
+                    logger.debug("🧹 [PARSER] Formato simples com X/Y=0 descartado")
+                    return None
                 data = {
-                    'x_point': float(x_position_match.group(1)),
-                    'y_point': float(y_position_match.group(1)),
+                    'x_point': x_pos,
+                    'y_point': y_pos,
                     'breath_rate': float(breath_rate_match.group(1)) if breath_rate_match else 15.0,
                     'heart_rate': float(heart_rate_match.group(1)) if heart_rate_match else 75.0,
-                    'distance': math.sqrt(float(x_position_match.group(1))**2 + float(y_position_match.group(1))**2),
+                    'distance': math.sqrt(x_pos**2 + y_pos**2),
                     'move_speed': 0.0,
                     'dop_index': 0,
                     'cluster_index': 0,
@@ -1020,11 +1031,15 @@ class DualRadarManager:
                 if data:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
+                    if DEBUG_RADAR:
+                        logger.debug(f"[RAW:{radar_id}] chunk=<{text.replace('\\n','\\n')[:120]}> len={len(text)}")
                     buffer += text
 
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip('\r')
+                        if DEBUG_RADAR:
+                            logger.debug(f"[RAW:{radar_id}] line=<{line}>")
 
                         # Linha em branco pode indicar fim de bloco
                         if not line.strip():
@@ -1048,6 +1063,8 @@ class DualRadarManager:
                         # Continuação do bloco atual
                         if message_mode:
                             message_buffer += line + '\n'
+                            if DEBUG_RADAR:
+                                logger.debug(f"[RAW:{radar_id}] buffering len={len(message_buffer)}")
                             # Atividade durante coleta de bloco
                             self.last_valid_data_times[radar_id] = time.time()
                             # Marca quando começar a seção Target 1
@@ -1056,6 +1073,8 @@ class DualRadarManager:
                             # Considera o bloco completo quando receber o último campo do alvo
                             # Em nossos dados, a última linha é "move_speed: ... cm/s"
                             if seen_target_header and 'move_speed' in line:
+                                if DEBUG_RADAR:
+                                    logger.debug(f"[RAW:{radar_id}] block_complete (move_speed)")
                                 self.process_radar_data(radar_id, message_buffer)
                                 self.last_valid_data_times[radar_id] = time.time()
                                 message_mode = False
@@ -1063,6 +1082,8 @@ class DualRadarManager:
                                 seen_target_header = False
                             # Alternativa: alguns firmwares não enviam move_speed. Finaliza ao ver apenas vitais + distância
                             elif (not seen_target_header) and ('distance:' in line):
+                                if DEBUG_RADAR:
+                                    logger.debug(f"[RAW:{radar_id}] block_complete (distance only)")
                                 self.process_radar_data(radar_id, message_buffer)
                                 self.last_valid_data_times[radar_id] = time.time()
                                 message_mode = False
