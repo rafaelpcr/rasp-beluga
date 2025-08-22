@@ -1032,7 +1032,8 @@ class DualRadarManager:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
                     if DEBUG_RADAR:
-                        logger.debug(f"[RAW:{radar_id}] chunk=<{text.replace('\\n','\\n')[:120]}> len={len(text)}")
+                        safe_chunk = text.replace('\n', '\\n')[:120]
+                        logger.debug(f"[RAW:{radar_id}] chunk=<{safe_chunk}> len={len(text)}")
                     buffer += text
 
                     while '\n' in buffer:
