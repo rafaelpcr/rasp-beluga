@@ -651,6 +651,7 @@ class DualRadarManager:
         self.SESSION_TIMEOUT = 60  # 1 minuto para identificar novas pessoas
         self.last_valid_data_times = {}
         self.RESET_TIMEOUT = 300  # 5 minutos (tolerância a deep sleep)
+        self.ZERO_ONLY_TIMEOUT = 60  # 1 minutos com dados zerados -> reset
         self.DEEP_SLEEP_GRACE = 15  # segundos para tolerar quedas breves
         self.reconnect_backoff = {cfg['id']: 1.0 for cfg in radar_configs}
         
@@ -676,6 +677,10 @@ class DualRadarManager:
             self.messages_failed[radar_id] = 0
             self.consecutive_errors[radar_id] = 0
             self.last_error_times[radar_id] = 0
+            # Monitor de dados zerados contínuos
+            if not hasattr(self, 'zero_only_since'):
+                self.zero_only_since = {}
+            self.zero_only_since[radar_id] = None
 
     def _generate_session_id(self, radar_id):
         """Gera um novo ID de sessão para um radar específico"""
@@ -1184,6 +1189,26 @@ class DualRadarManager:
         
         if data is None:
             logger.warning(f"❌ [{radar_id}] Parser retornou None para: {raw_data[:200]}...")
+            # Heurística: se bloco contém vitais e posições zeradas, conta como zero contínuo
+            try:
+                xr = re.search(r'x_position\s*:\s*([-+]?\d*\.?\d+)', raw_data)
+                yr = re.search(r'y_position\s*:\s*([-+]?\d*\.?\d+)', raw_data)
+                br = re.search(r'breath_rate\s*:\s*([-+]?\d*\.?\d+)', raw_data)
+                hr = re.search(r'heart_rate\s*:\s*([-+]?\d*\.?\d+)', raw_data)
+                if xr and yr and br and hr:
+                    xv = float(xr.group(1)); yv = float(yr.group(1));
+                    bv = float(br.group(1)); hv = float(hr.group(1));
+                    if abs(xv) < 1e-6 and abs(yv) < 1e-6 and bv == 0.0 and hv == 0.0:
+                        if not self.zero_only_since.get(radar_id):
+                            self.zero_only_since[radar_id] = time.time()
+                        elif time.time() - self.zero_only_since[radar_id] > self.ZERO_ONLY_TIMEOUT:
+                            logger.warning(f"⚠️ [{radar_id}] Somente zeros há mais de {self.ZERO_ONLY_TIMEOUT}s. Resetando...")
+                            self.hardware_reset_radar(radar_id)
+                            self.zero_only_since[radar_id] = time.time()
+                    else:
+                        self.zero_only_since[radar_id] = None
+            except Exception:
+                pass
             return
             
         # Marca como dados reais e adiciona identificador do radar
@@ -1201,6 +1226,10 @@ class DualRadarManager:
         if (abs(x) < 1e-6 and abs(y) < 1e-6):
             snippet = raw_data if len(raw_data) < 600 else raw_data[:600] + "..."
             logger.warning(f"🕵️ [{radar_id}] X/Y zerados. Bloco bruto recebido:\n{snippet}")
+            if not self.zero_only_since.get(radar_id):
+                self.zero_only_since[radar_id] = time.time()
+        else:
+            self.zero_only_since[radar_id] = None
         move_speed = abs(data.get('dop_index', 0) * RANGE_STEP) if 'dop_index' in data else data.get('move_speed', 0)
         
         if self._is_new_person(radar_id, x, y, move_speed):
@@ -1327,6 +1356,13 @@ class DualRadarManager:
                 
         except Exception as e:
             logger.error(f"❌ [{radar_id}] Erro ao enviar dados: {str(e)}")
+
+        # Verificação final do período de zeros contínuos
+        if self.zero_only_since.get(radar_id):
+            if time.time() - self.zero_only_since[radar_id] > self.ZERO_ONLY_TIMEOUT:
+                logger.warning(f"⚠️ [{radar_id}] Somente zeros há mais de {self.ZERO_ONLY_TIMEOUT}s. Resetando...")
+                self.hardware_reset_radar(radar_id)
+                self.zero_only_since[radar_id] = time.time()
 
     def _check_engagement(self, section_id, distance, move_speed):
         """Verifica engajamento baseado na seção, distância e velocidade"""
