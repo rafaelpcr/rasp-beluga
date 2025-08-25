@@ -62,7 +62,13 @@ class GoogleSheetsManager:
             raise
         
         try:
-            self.spreadsheet = self.gc.open(spreadsheet_name)
+            # Permite abrir por URL, ID ou nome
+            if isinstance(spreadsheet_name, str) and spreadsheet_name.startswith('http'):
+                self.spreadsheet = self.gc.open_by_url(spreadsheet_name)
+            elif isinstance(spreadsheet_name, str) and re.match(r'^[A-Za-z0-9_-]{40,}$', spreadsheet_name):
+                self.spreadsheet = self.gc.open_by_key(spreadsheet_name)
+            else:
+                self.spreadsheet = self.gc.open(spreadsheet_name)
         except Exception as e:
             logger.error(f"❌ Erro ao abrir planilha: {str(e)}")
             raise
@@ -77,19 +83,20 @@ class GoogleSheetsManager:
     def insert_radar_data(self, data):
         try:
             row = [
-                data.get('session_id'),
-                data.get('timestamp'),
-                data.get('x_point'),
-                data.get('y_point'),
-                data.get('move_speed'),
-                data.get('heart_rate'),
-                data.get('breath_rate'),
-                data.get('distance'),
-                data.get('section_id'),
-                data.get('product_id'),
-                data.get('satisfaction_score'),
-                data.get('satisfaction_class'),
-                data.get('is_engaged')
+                data.get('radar_id') or os.getenv('RADAR_ID', 'RADAR_1'),  # Radar_id (coluna A)
+                data.get('session_id'),                                     # session_id (B)
+                data.get('timestamp'),                                       # timestamp (C)
+                data.get('x_point'),                                         # x_point (D)
+                data.get('y_point'),                                         # y_point (E)
+                data.get('move_speed'),                                      # move_speed (F)
+                data.get('heart_rate'),                                      # heart_rate (G)
+                data.get('breath_rate'),                                     # breath_rate (H)
+                data.get('distance'),                                        # distance (I)
+                data.get('section_id'),                                      # section_id (J)
+                data.get('product_id'),                                      # product_id (K)
+                data.get('satisfaction_score'),                              # satisfaction_score (L)
+                data.get('satisfaction_class'),                              # satisfaction_class (M)
+                data.get('is_engaged')                                       # is_engaged (N)
             ]
             
             # Verificar se há valores None ou problemáticos
@@ -193,11 +200,11 @@ def parse_serial_data(raw_data):
                 logger.debug(f"📡 [PARSER] Usando coordenadas de posição: x={x_coord}, y={y_coord}")
             
             if x_coord is not None and y_coord is not None:
-                # Extrai velocidade (move_speed em cm/s, converte para m/s)
+                # Extrai velocidade (move_speed em cm/s)
                 move_speed = 0.0
                 if move_speed_match:
-                    move_speed = float(move_speed_match.group(1)) / 100.0  # cm/s para m/s
-                    logger.debug(f"📡 [PARSER] Velocidade detectada: {move_speed} m/s")
+                    move_speed = float(move_speed_match.group(1))  # cm/s
+                    logger.debug(f"📡 [PARSER] Velocidade detectada: {move_speed} cm/s")
                 
                 # Extrai dados vitais
                 breath_rate = 15.0  # Valor padrão
@@ -1313,7 +1320,10 @@ class SerialRadarManager:
         
         x = data.get('x_point', 0)
         y = data.get('y_point', 0)
-        move_speed = abs(data.get('dop_index', 0) * RANGE_STEP) if 'dop_index' in data else data.get('move_speed', 0)
+        dop_index_val = data.get('dop_index', None)
+        move_speed = data.get('move_speed', None)
+        if move_speed is None:
+            move_speed = abs(dop_index_val) if dop_index_val is not None else 0.0  # cm/s
         
         if self._is_new_person(x, y, move_speed):
             self.current_session_id = self._generate_session_id()
@@ -1352,10 +1362,12 @@ class SerialRadarManager:
             y = data.get('y_point', 0)
             distance = (x**2 + y**2)**0.5
         
-        dop_index = data.get('dop_index', 0) if 'dop_index' in data else 0
-        move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else data.get('move_speed', 0)
+        dop_index = data.get('dop_index', None)
+        if move_speed is None:
+            move_speed = abs(dop_index) if dop_index is not None else 0.0
         
         converted_data = {
+            'radar_id': os.getenv('RADAR_ID', 'RADAR_1'),
             'session_id': self.current_session_id,
             'x_point': data.get('x_point', 0),
             'y_point': data.get('y_point', 0),
@@ -1446,7 +1458,7 @@ def main():
     
     try:
         # Usar path absoluto otimizado
-        gsheets_manager = GoogleSheetsManager(CREDENTIALS_PATH, 'Projeto_cocacola')
+        gsheets_manager = GoogleSheetsManager(CREDENTIALS_PATH, 'https://docs.google.com/spreadsheets/d/1MaXRVAe1iD2TH45e1BCObthJXUe_A33VJMKLO_roF74/edit?usp=sharing')
         logger.info("✅ Google Sheets conectado")
         
     except Exception as e:
