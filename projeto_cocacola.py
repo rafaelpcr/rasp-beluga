@@ -237,11 +237,7 @@ def parse_serial_data(raw_data):
                 logger.debug(f"📡 [PARSER] Usando coordenadas de posição: x={x_coord}, y={y_coord}")
             
             if x_coord is not None and y_coord is not None:
-                # Descartar blocos sem alvo com X/Y zerados
-                if not has_target_1 and abs(x_coord) < 1e-6 and abs(y_coord) < 1e-6:
-                    if DEBUG_RADAR:
-                        logger.debug("🧹 [PARSER] Bloco sem Target e X/Y=0 descartado")
-                    return None
+                # Não descartar por X/Y=0: enviaremos mesmo assim
                 # Extrai velocidade (move_speed em cm/s, converte para m/s)
                 move_speed = 0.0
                 if move_speed_match:
@@ -307,10 +303,6 @@ def parse_serial_data(raw_data):
             if x_position_match and y_position_match:
                 x_pos = float(x_position_match.group(1))
                 y_pos = float(y_position_match.group(1))
-                # Evita enviar blocos sem alvo quando X/Y são ambos zero
-                if abs(x_pos) < 1e-6 and abs(y_pos) < 1e-6:
-                    logger.debug("🧹 [PARSER] Formato simples com X/Y=0 descartado")
-                    return None
                 data = {
                     'x_point': x_pos,
                     'y_point': y_pos,
@@ -328,12 +320,20 @@ def parse_serial_data(raw_data):
         
         # FORMATO 3: Mensagens do sistema (não processa dados, só registra)
         if any(msg in raw_data for msg in ['HEARTBEAT:', 'DEEP SLEEP', 'Acordou', 'Sistema ativo']):
+            # Continua sem erro; não gera dados mas também não bloqueia o fluxo
             logger.debug(f"📡 [PARSER] Mensagem do sistema: {raw_data.strip()}")
             return None
             
         # Se nenhum formato foi reconhecido
+        # Não falha duro: retorna mínimos zeros para permitir logging/envio
         logger.warning(f"⚠️ [PARSER] Formato não reconhecido: {raw_data[:100]}...")
-        return None
+        return {
+            'x_point': 0.0,
+            'y_point': 0.0,
+            'move_speed': 0.0,
+            'heart_rate': 0.0,
+            'breath_rate': 0.0
+        }
         
     except Exception as e:
         logger.error(f"❌ Erro ao analisar dados seriais: {str(e)}")
@@ -857,6 +857,17 @@ class DualRadarManager:
             return False
         
         try:
+            # Se a porta não existir mais (apos reset/reenumeração), reescaneia
+            if not config.get('port') or not os.path.exists(str(config.get('port'))):
+                logger.warning(f"⚠️ [{radar_id}] Porta {config.get('port')} indisponível. Redetectando portas...")
+                if not self.find_serial_ports():
+                    logger.error(f"❌ [{radar_id}] Falha na redetecção de portas")
+                    return False
+                config = next((c for c in self.radar_configs if c['id'] == radar_id), None)
+                if not config or not config.get('port'):
+                    logger.error(f"❌ [{radar_id}] Porta não atribuída após redetecção")
+                    return False
+
             logger.info(f"🔄 Conectando {radar_id} à porta {config['port']} (baudrate: {config['baudrate']})...")
             
             serial_connection = serial.Serial(
@@ -882,7 +893,19 @@ class DualRadarManager:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Erro ao conectar {radar_id}: {str(e)}")
+            err_msg = str(e)
+            logger.error(f"❌ Erro ao conectar {radar_id}: {err_msg}")
+            # Se a porta sumiu/renomeou, tenta redetectar uma vez e reconectar
+            if any(key in err_msg for key in ['No such file or directory', 'could not open port']):
+                try:
+                    time.sleep(1.0)
+                    if self.find_serial_ports():
+                        config = next((c for c in self.radar_configs if c['id'] == radar_id), None)
+                        if config and config.get('port'):
+                            logger.info(f"🔁 [{radar_id}] Tentando reconectar após redetecção em {config['port']}...")
+                            return self.connect_radar(radar_id)
+                except Exception:
+                    pass
             logger.error(traceback.format_exc())
             return False
 
@@ -1059,6 +1082,12 @@ class DualRadarManager:
 
                         # Início de um novo bloco de dados do radar
                         if '-----Human Detected-----' in line:
+                            # Se já estávamos coletando um bloco, finalize o anterior antes de iniciar outro
+                            if message_mode and message_buffer:
+                                if DEBUG_RADAR:
+                                    logger.debug(f"[RAW:{radar_id}] block_complete (novo cabeçalho)")
+                                self.process_radar_data(radar_id, message_buffer)
+                                self.last_valid_data_times[radar_id] = time.time()
                             message_mode = True
                             message_buffer = line + '\n'
                             seen_target_header = False
@@ -1086,15 +1115,7 @@ class DualRadarManager:
                                 message_mode = False
                                 message_buffer = ""
                                 seen_target_header = False
-                            # Alternativa: alguns firmwares não enviam move_speed. Finaliza ao ver apenas vitais + distância
-                            elif (not seen_target_header) and ('distance:' in line):
-                                if DEBUG_RADAR:
-                                    logger.debug(f"[RAW:{radar_id}] block_complete (distance only)")
-                                self.process_radar_data(radar_id, message_buffer)
-                                self.last_valid_data_times[radar_id] = time.time()
-                                message_mode = False
-                                message_buffer = ""
-                                seen_target_header = False
+                            # Não finaliza somente por 'distance:' se ainda podemos receber Target 1
                             # Fallback: se vier uma linha em branco (separador), finalize também
                             continue
 
