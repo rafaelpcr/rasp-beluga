@@ -18,7 +18,7 @@ import sys
 
 # Paths absolutos para SystemD
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CREDENTIALS_PATH = os.path.join(SCRIPT_DIR, 'credenciais2.json')  # Usar credenciais2.json para as planilhas corretas
+CREDENTIALS_PATH = os.path.join(SCRIPT_DIR, 'credenciais2.json')
 ENV_FILE_PATH = os.path.join(SCRIPT_DIR, '.env')
 
 # Configuração básica de logging
@@ -35,32 +35,12 @@ logging.getLogger('gspread').setLevel(logging.WARNING)
 
 # Carregar variáveis de ambiente do diretório correto
 load_dotenv(ENV_FILE_PATH)
-DEBUG_RADAR = os.getenv('DEBUG_RADAR', '0') not in ['0', 'false', 'False', None]
 
 SERIAL_CONFIG = {
+    'port': None,  # Será detectada automaticamente
     'baudrate': int(os.getenv('SERIAL_BAUDRATE', 115200))
 }
 RANGE_STEP = 2.5
-
-# Configuração para dois radares
-RADAR_CONFIGS = [
-    {
-        'id': 'RADAR_1',
-        'port': None,  # Será detectada automaticamente
-        'baudrate': int(os.getenv('SERIAL_BAUDRATE', 115200)),
-        'description': 'Radar Principal',
-        'spreadsheet_name': '1MaXRVAe1iD2TH45e1BCObthJXUe_A33VJMKLO_roF74',  # ID da planilha do RADAR_1
-        'worksheet_name': 'Sheet1'
-    },
-    {
-        'id': 'RADAR_2', 
-        'port': None,  # Será detectada automaticamente
-        'baudrate': int(os.getenv('SERIAL_BAUDRATE', 115200)),
-        'description': 'Radar Secundário',
-        'spreadsheet_name': '12FXUwRsTJitaqeogeheqEtWajYC10_-ckiZIAxu87g4',  # ID da planilha do RADAR_2
-        'worksheet_name': 'Sheet1'  # Worksheet padrão
-    }
-]
 
 class GoogleSheetsManager:
     def __init__(self, creds_path, spreadsheet_name, worksheet_name='Sheet1'):
@@ -82,55 +62,41 @@ class GoogleSheetsManager:
             raise
         
         try:
-            # Tenta abrir a planilha pelo nome
-            try:
+            # Permite abrir por URL, ID ou nome
+            if isinstance(spreadsheet_name, str) and spreadsheet_name.startswith('http'):
+                self.spreadsheet = self.gc.open_by_url(spreadsheet_name)
+            elif isinstance(spreadsheet_name, str) and re.match(r'^[A-Za-z0-9_-]{40,}$', spreadsheet_name):
+                self.spreadsheet = self.gc.open_by_key(spreadsheet_name)
+            else:
                 self.spreadsheet = self.gc.open(spreadsheet_name)
-            except Exception as e:
-                # Se falhar pelo nome, tenta pelo ID (para RADAR_2)
-                if len(spreadsheet_name) > 20:  # Provavelmente é um ID
-                    try:
-                        self.spreadsheet = self.gc.open_by_key(spreadsheet_name)
-                        logger.info(f"✅ Planilha aberta pelo ID: {spreadsheet_name}")
-                    except Exception as e2:
-                        logger.error(f"❌ Erro ao abrir planilha pelo ID {spreadsheet_name}: {str(e2)}")
-                        raise e2
-                else:
-                    logger.error(f"❌ Erro ao abrir planilha pelo nome {spreadsheet_name}: {str(e)}")
-                    raise e
         except Exception as e:
             logger.error(f"❌ Erro ao abrir planilha: {str(e)}")
             raise
         
         try:
-            # Lista todas as worksheets disponíveis para debug
-            available_worksheets = [ws.title for ws in self.spreadsheet.worksheets()]
-            logger.info(f"📋 Worksheets disponíveis: {available_worksheets}")
-            
-            # Tenta acessar a worksheet especificada
             self.worksheet = self.spreadsheet.worksheet(worksheet_name)
-            logger.info(f"✅ Google Sheets conectado - Planilha: {self.spreadsheet.title}, Worksheet: {worksheet_name}")
+            logger.info(f"✅ Google Sheets conectado")
         except Exception as e:
-            logger.error(f"❌ Erro ao acessar worksheet '{worksheet_name}': {str(e)}")
-            logger.error(f"❌ Worksheets disponíveis: {[ws.title for ws in self.spreadsheet.worksheets()]}")
+            logger.error(f"❌ Erro ao acessar worksheet: {str(e)}")
             raise
 
     def insert_radar_data(self, data):
         try:
             row = [
-                data.get('radar_id', 'N/A'),      # A: Identificador do radar
-                data.get('session_id', ''),       # B: ID da sessão
-                data.get('timestamp', ''),        # C: Timestamp
-                data.get('x_point', 0),          # D: Posição X
-                data.get('y_point', 0),          # E: Posição Y
-                data.get('move_speed', 0),       # F: Velocidade
-                data.get('heart_rate', 0),       # G: Frequência cardíaca
-                data.get('breath_rate', 0),      # H: Taxa de respiração
-                data.get('distance', 0),         # I: Distância
-                data.get('section_id', ''),      # J: ID da seção
-                data.get('product_id', ''),      # K: ID do produto
-                data.get('satisfaction_score', ''), # L: Score de satisfação
-                data.get('satisfaction_class', ''), # M: Classe de satisfação
-                data.get('is_engaged', False)    # N: Se está engajado
+                data.get('radar_id') or os.getenv('RADAR_ID', 'RADAR_1'),  # Radar_id (coluna A)
+                data.get('session_id'),                                     # session_id (B)
+                data.get('timestamp'),                                       # timestamp (C)
+                data.get('x_point'),                                         # x_point (D)
+                data.get('y_point'),                                         # y_point (E)
+                data.get('move_speed'),                                      # move_speed (F)
+                data.get('heart_rate'),                                      # heart_rate (G)
+                data.get('breath_rate'),                                     # breath_rate (H)
+                data.get('distance'),                                        # distance (I)
+                data.get('section_id'),                                      # section_id (J)
+                data.get('product_id'),                                      # product_id (K)
+                data.get('satisfaction_score'),                              # satisfaction_score (L)
+                data.get('satisfaction_class'),                              # satisfaction_class (M)
+                data.get('is_engaged')                                       # is_engaged (N)
             ]
             
             # Verificar se há valores None ou problemáticos
@@ -175,9 +141,6 @@ class GoogleSheetsManager:
 
 def parse_serial_data(raw_data):
     try:
-        if DEBUG_RADAR:
-            dbg = raw_data if len(raw_data) < 600 else raw_data[:600] + '...'
-            logger.debug(f"[PARSER] raw=\n{dbg}")
         # Suporte para múltiplos formatos de dados do Arduino
         
         # FORMATO 1: Formato atual do radar (Human Detected + Target)
@@ -237,16 +200,11 @@ def parse_serial_data(raw_data):
                 logger.debug(f"📡 [PARSER] Usando coordenadas de posição: x={x_coord}, y={y_coord}")
             
             if x_coord is not None and y_coord is not None:
-                # Descartar blocos sem alvo com X/Y zerados
-                if not has_target_1 and abs(x_coord) < 1e-6 and abs(y_coord) < 1e-6:
-                    if DEBUG_RADAR:
-                        logger.debug("🧹 [PARSER] Bloco sem Target e X/Y=0 descartado")
-                    return None
-                # Extrai velocidade (move_speed em cm/s, converte para m/s)
+                # Extrai velocidade (move_speed em cm/s)
                 move_speed = 0.0
                 if move_speed_match:
-                    move_speed = float(move_speed_match.group(1)) / 100.0  # cm/s para m/s
-                    logger.debug(f"📡 [PARSER] Velocidade detectada: {move_speed} m/s")
+                    move_speed = float(move_speed_match.group(1))  # cm/s
+                    logger.debug(f"📡 [PARSER] Velocidade detectada: {move_speed} cm/s")
                 
                 # Extrai dados vitais
                 breath_rate = 15.0  # Valor padrão
@@ -305,18 +263,12 @@ def parse_serial_data(raw_data):
             y_position_match = re.search(r'y_position\s*:\s*([-+]?\d*\.?\d+)', raw_data, re.IGNORECASE)
             
             if x_position_match and y_position_match:
-                x_pos = float(x_position_match.group(1))
-                y_pos = float(y_position_match.group(1))
-                # Evita enviar blocos sem alvo quando X/Y são ambos zero
-                if abs(x_pos) < 1e-6 and abs(y_pos) < 1e-6:
-                    logger.debug("🧹 [PARSER] Formato simples com X/Y=0 descartado")
-                    return None
                 data = {
-                    'x_point': x_pos,
-                    'y_point': y_pos,
+                    'x_point': float(x_position_match.group(1)),
+                    'y_point': float(y_position_match.group(1)),
                     'breath_rate': float(breath_rate_match.group(1)) if breath_rate_match else 15.0,
                     'heart_rate': float(heart_rate_match.group(1)) if heart_rate_match else 75.0,
-                    'distance': math.sqrt(x_pos**2 + y_pos**2),
+                    'distance': math.sqrt(float(x_position_match.group(1))**2 + float(y_position_match.group(1))**2),
                     'move_speed': 0.0,
                     'dop_index': 0,
                     'cluster_index': 0,
@@ -632,628 +584,785 @@ class VitalSignsManager:
             return None
 
 # Remover importação da EmotionalStateAnalyzer e campos emocionais
-class DualRadarManager:
-    def __init__(self, radar_configs):
-        self.radar_configs = radar_configs
-        self.radar_connections = {}  # Dicionário para armazenar conexões de cada radar
+class SerialRadarManager:
+    def __init__(self, port=None, baudrate=115200):
+        self.port = port or SERIAL_CONFIG['port']
+        self.baudrate = baudrate or SERIAL_CONFIG['baudrate']
+        self.serial_connection = None
         self.is_running = False
-        self.receive_threads = {}  # Threads para cada radar
+        self.receive_thread = None
         self.db_manager = None
         self.analytics_manager = AnalyticsManager()
         self.vital_signs_manager = VitalSignsManager()
-        
-        # Sessões separadas para cada radar
-        self.current_session_ids = {}
-        self.last_activity_times = {}
-        self.session_positions = {}
-        
-        # Configurações de sessão
+        # self.emotional_analyzer = EmotionalStateAnalyzer()  # Removido
+        self.current_session_id = None
+        self.last_activity_time = None
         self.SESSION_TIMEOUT = 60  # 1 minuto para identificar novas pessoas
-        self.last_valid_data_times = {}
-        self.RESET_TIMEOUT = 300  # 5 minutos (tolerância a deep sleep)
-        self.ZERO_ONLY_TIMEOUT = 60  # 1 minutos com dados zerados -> reset
-        self.DEEP_SLEEP_GRACE = 15  # segundos para tolerar quedas breves
-        self.reconnect_backoff = {cfg['id']: 1.0 for cfg in radar_configs}
+        self.last_valid_data_time = time.time()  # Timestamp do último dado válido
+        self.RESET_TIMEOUT = 60  # 1 minuto
+        # Buffer para engajamento
+        self.engagement_buffer = []
+        self.ENGAGEMENT_WINDOW = 1
+        self.ENGAGEMENT_DISTANCE = 1.0
+        self.ENGAGEMENT_SPEED = 10.0
+        self.ENGAGEMENT_MIN_COUNT = 1
+        # Parâmetros para detecção de pessoas
+        self.last_position = None
+        self.POSITION_THRESHOLD = 0.5
+        self.MOVEMENT_THRESHOLD = 20.0
+        self.session_positions = []
         
         # Contadores para debug
-        self.messages_received = {}
-        self.messages_processed = {}
-        self.messages_failed = {}
+        self.messages_received = 0
+        self.messages_processed = 0
+        self.messages_failed = 0
         
         # Sistema de retry para reconexões
-        self.consecutive_errors = {}
+        self.consecutive_errors = 0
         self.MAX_CONSECUTIVE_ERRORS = 5
-        self.last_error_times = {}
-        
-        # Inicializa estruturas para cada radar
-        for config in radar_configs:
-            radar_id = config['id']
-            self.current_session_ids[radar_id] = None
-            self.last_activity_times[radar_id] = None
-            self.session_positions[radar_id] = []
-            self.last_valid_data_times[radar_id] = time.time()
-            self.messages_received[radar_id] = 0
-            self.messages_processed[radar_id] = 0
-            self.messages_failed[radar_id] = 0
-            self.consecutive_errors[radar_id] = 0
-            self.last_error_times[radar_id] = 0
-            # Monitor de dados zerados contínuos
-            if not hasattr(self, 'zero_only_since'):
-                self.zero_only_since = {}
-            self.zero_only_since[radar_id] = None
+        self.last_error_time = 0
 
-    def _generate_session_id(self, radar_id):
-        """Gera um novo ID de sessão para um radar específico"""
-        # Gera UUID único sem o prefixo do radar para evitar duplicação
+    def _generate_session_id(self):
+        """Gera um novo ID de sessão"""
         return str(uuid.uuid4())
 
-    def _check_session_timeout(self, radar_id):
-        """Verifica se a sessão atual de um radar expirou"""
-        if (self.last_activity_times[radar_id] and 
-            (time.time() - self.last_activity_times[radar_id]) > self.SESSION_TIMEOUT):
-            logger.debug(f"Sessão expirada para {radar_id}, gerando nova sessão")
-            self.current_session_ids[radar_id] = self._generate_session_id(radar_id)
-            self.last_activity_times[radar_id] = time.time()
-            self.session_positions[radar_id] = []
+    def _check_session_timeout(self):
+        """Verifica se a sessão atual expirou"""
+        if self.last_activity_time and (time.time() - self.last_activity_time) > self.SESSION_TIMEOUT:
+            logger.debug("Sessão expirada, gerando nova sessão")
+            self.current_session_id = self._generate_session_id()
+            self.last_activity_time = time.time()
+            self.session_positions = []  # Limpa histórico de posições
             return True
         return False
 
-    def _is_new_person(self, radar_id, x, y, move_speed):
-        """Verifica se os dados indicam uma nova pessoa para um radar específico"""
-        last_position = getattr(self, 'last_positions', {}).get(radar_id)
-        if not last_position:
+    def _is_new_person(self, x, y, move_speed):
+        """Verifica se os dados indicam uma nova pessoa"""
+        if not self.last_position:
             return True
 
-        last_x, last_y = last_position
+        last_x, last_y = self.last_position
         distance = math.sqrt((x - last_x)**2 + (y - last_y)**2)
         
         # Se a distância for muito grande ou a velocidade for muito alta, provavelmente é uma nova pessoa
-        if distance > 0.5 or move_speed > 20.0:
+        if distance > self.POSITION_THRESHOLD or move_speed > self.MOVEMENT_THRESHOLD:
             return True
             
         # Verifica se o movimento é consistente com a última posição
-        if len(self.session_positions[radar_id]) >= 2:
-            last_positions = self.session_positions[radar_id][-2:]
+        if len(self.session_positions) >= 2:
+            last_positions = self.session_positions[-2:]
             avg_speed = sum(p['speed'] for p in last_positions) / len(last_positions)
-            if abs(move_speed - avg_speed) > 20.0:
+            if abs(move_speed - avg_speed) > self.MOVEMENT_THRESHOLD:
                 return True
                 
         return False
 
-    def _update_session(self, radar_id):
-        """Atualiza ou cria uma nova sessão para um radar específico"""
+    def _update_session(self):
+        """Atualiza ou cria uma nova sessão"""
         current_time = time.time()
         
         # Verifica timeout da sessão
-        if (not self.current_session_ids[radar_id] or 
-            self._check_session_timeout(radar_id)):
-            self.current_session_ids[radar_id] = self._generate_session_id(radar_id)
-            self.last_activity_times[radar_id] = current_time
-            self.session_positions[radar_id] = []
-            logger.debug(f"Nova sessão iniciada para {radar_id}: {self.current_session_ids[radar_id]}")
+        if not self.current_session_id or self._check_session_timeout():
+            self.current_session_id = self._generate_session_id()
+            self.last_activity_time = current_time
+            self.session_positions = []  # Limpa histórico de posições
+            logger.debug(f"Nova sessão iniciada: {self.current_session_id}")
         else:
-            self.last_activity_times[radar_id] = current_time
+            self.last_activity_time = current_time
 
-    def find_serial_ports(self):
-        """Detecta automaticamente portas seriais disponíveis para ambos os radares"""
+    def find_serial_port(self):
+        """Detecta automaticamente a porta serial do Arduino/ESP32"""
         try:
-            # Tenta importar serial.tools.list_ports
-            try:
-                import serial.tools.list_ports
-                logger.info("🔍 Buscando portas seriais disponíveis para dois radares...")
-                ports = list(serial.tools.list_ports.comports())
-                
-                if not ports:
-                    logger.error("❌ Nenhuma porta serial encontrada!")
-                    return False
-                
-                logger.info(f"📋 {len(ports)} porta(s) encontrada(s):")
-                
-                # Lista todas as portas para debug
-                for i, port in enumerate(ports):
-                    logger.info(f"   {i+1}. {port.device}")
-                    logger.info(f"      Descrição: {port.description}")
-                    if hasattr(port, 'manufacturer') and port.manufacturer:
-                        logger.info(f"      Fabricante: {port.manufacturer}")
-                
-                # Filtra portas válidas (exclui Bluetooth e debug console)
-                valid_ports = []
-                for port in ports:
-                    device_lower = str(port.device).lower()
-                    desc_lower = str(port.description).lower()
-                    
-                    # Evita portas Bluetooth e debug console
-                    if not any(skip in device_lower or skip in desc_lower for skip in 
-                              ['bluetooth', 'debug-console', 'incoming-port']):
-                        valid_ports.append(port)
-                
-                if len(valid_ports) < 2:
-                    logger.error(f"❌ Apenas {len(valid_ports)} porta(s) válida(s) encontrada(s). São necessárias 2 portas para dois radares.")
-                    return False
-                
-                # Atribui portas aos radares
-                for i, config in enumerate(self.radar_configs):
-                    if i < len(valid_ports):
-                        config['port'] = valid_ports[i].device
-                        logger.info(f"✅ {config['id']} ({config['description']}) atribuído à porta: {config['port']}")
-                    else:
-                        logger.error(f"❌ Não há portas suficientes para {config['id']}")
-                        return False
-                
-                return True
-                
-            except ImportError:
-                # Fallback: detecta portas manualmente (Linux/Raspberry Pi)
-                logger.warning("⚠️ serial.tools.list_ports não disponível, usando detecção manual...")
-                return self._find_serial_ports_manual()
-                
-        except Exception as e:
-            logger.error(f"❌ Erro na detecção de portas: {str(e)}")
-            return False
-
-    def _find_serial_ports_manual(self):
-        """Detecção manual de portas seriais para sistemas sem serial.tools"""
-        try:
-            import glob
-            import os
+            import serial.tools.list_ports
             
-            logger.info("🔍 Detecção manual de portas seriais...")
+            logger.info("🔍 Buscando portas seriais disponíveis...")
+            ports = list(serial.tools.list_ports.comports())
             
-            # Padrões comuns de portas seriais no Linux/Raspberry Pi
-            port_patterns = [
-                '/dev/ttyUSB*',      # USB-Serial
-                '/dev/ttyACM*',      # Arduino/ESP32
-                '/dev/ttyS*',        # Serial padrão
-                '/dev/ttyAMA*'       # Raspberry Pi GPIO
-            ]
-            
-            all_ports = []
-            for pattern in port_patterns:
-                ports = glob.glob(pattern)
-                all_ports.extend(ports)
-            
-            if not all_ports:
+            if not ports:
                 logger.error("❌ Nenhuma porta serial encontrada!")
-                return False
+                return None
             
-            # Filtra portas válidas
+            logger.info(f"📋 {len(ports)} porta(s) encontrada(s):")
+            
+            # Lista todas as portas para debug
             valid_ports = []
-            for port in all_ports:
-                try:
-                    # Verifica se a porta pode ser aberta
-                    if os.access(port, os.R_OK | os.W_OK):
-                        valid_ports.append(port)
-                        logger.info(f"   ✅ Porta válida: {port}")
-                    else:
-                        logger.debug(f"   ⚠️ Porta sem permissão: {port}")
-                except Exception as e:
-                    logger.debug(f"   ⚠️ Porta inacessível: {port} - {e}")
+            for i, port in enumerate(ports):
+                logger.info(f"   {i+1}. {port.device}")
+                logger.info(f"      Descrição: {port.description}")
+                if hasattr(port, 'manufacturer') and port.manufacturer:
+                    logger.info(f"      Fabricante: {port.manufacturer}")
+                # Marca como candidata se aparenta ser dispositivo serial de radar
+                desc_lower = str(port.description).lower()
+                manuf_lower = str(getattr(port, 'manufacturer', '')).lower()
+                device_lower = str(port.device).lower()
+                radar_like = (
+                    'espressif' in manuf_lower or 'esp32' in desc_lower or 'esp-32' in desc_lower or
+                    'arduino' in desc_lower or 'uno' in desc_lower or 'nano' in desc_lower or
+                    any(chip in desc_lower for chip in ['cp210', 'ch340', 'ft232', 'pl2303']) or
+                    any(pattern in device_lower for pattern in ['usbmodem', 'ttyusb', 'ttyacm'])
+                )
+                if radar_like:
+                    valid_ports.append(port)
             
-            if len(valid_ports) < 2:
-                logger.error(f"❌ Apenas {len(valid_ports)} porta(s) válida(s) encontrada(s). São necessárias 2 portas para dois radares.")
-                logger.info("💡 Dica: Conecte dois dispositivos USB ou verifique permissões das portas")
-                return False
+            # Mensagens amigáveis para cenários de 1 ou 2+ portas
+            if len(valid_ports) >= 2:
+                logger.info("✅ Duas ou mais portas compatíveis detectadas. Operando com a primeira disponível.")
+            elif len(valid_ports) == 1:
+                logger.warning("⚠️ Apenas 1 porta(s) válida(s) encontrada(s). Executando em modo de 1 radar.")
             
-            # Atribui portas aos radares
-            for i, config in enumerate(self.radar_configs):
-                if i < len(valid_ports):
-                    config['port'] = valid_ports[i]
-                    logger.info(f"✅ {config['id']} ({config['description']}) atribuído à porta: {config['port']}")
-                else:
-                    logger.error(f"❌ Não há portas suficientes para {config['id']}")
-                    return False
+            # PRIORIDADE 1: Busca ESP32/Espressif primeiro
+            for port in ports:
+                desc = str(port.description).lower()
+                manuf = str(getattr(port, 'manufacturer', '')).lower()
+                
+                if 'espressif' in manuf or 'esp32' in desc or 'esp-32' in desc:
+                    logger.info(f"✅ ESP32 detectado: {port.device}")
+                    return port.device
             
-            return True
+            # PRIORIDADE 2: Busca Arduino
+            for port in ports:
+                desc = str(port.description).lower()
+                if 'arduino' in desc or 'uno' in desc or 'nano' in desc:
+                    logger.info(f"✅ Arduino detectado: {port.device}")
+                    return port.device
+            
+            # PRIORIDADE 3: Busca chips USB-Serial comuns
+            for port in ports:
+                desc = str(port.description).lower()
+                device = str(port.device).lower()
+                
+                # Chips conhecidos
+                if any(chip in desc for chip in ['cp210', 'ch340', 'ft232', 'pl2303']):
+                    logger.info(f"✅ Chip USB-Serial detectado: {port.device}")
+                    return port.device
+                
+                # Padrões de nome no macOS/Linux
+                if any(pattern in device for pattern in ['usbmodem', 'ttyusb', 'ttyacm']):
+                    logger.info(f"✅ Porta USB detectada: {port.device}")
+                    return port.device
+            
+            # ÚLTIMO RECURSO: Primeira porta que não seja Bluetooth
+            for port in ports:
+                device_lower = str(port.device).lower()
+                desc_lower = str(port.description).lower()
+                
+                # Evita portas Bluetooth e debug console
+                if not any(skip in device_lower or skip in desc_lower for skip in 
+                          ['bluetooth', 'debug-console', 'incoming-port']):
+                    logger.warning(f"⚠️ Usando primeira porta válida: {port.device}")
+                    return port.device
+            
+            # Se tudo falhar, usa a primeira
+            logger.warning(f"⚠️ Usando primeira porta disponível: {ports[0].device}")
+            return ports[0].device
             
         except Exception as e:
-            logger.error(f"❌ Erro na detecção manual de portas: {str(e)}")
+            logger.error(f"❌ Erro na detecção de porta: {str(e)}")
+            return None
+    
+    def _test_port_communication(self, port_device):
+        """Testa se uma porta pode ser aberta e comunicar"""
+        try:
+            with serial.Serial(port_device, self.baudrate, timeout=1) as test_serial:
+                # Tenta ler alguns bytes para ver se há atividade
+                test_serial.read(10)
+                return True
+        except Exception:
             return False
 
-    def connect_radar(self, radar_id):
-        """Conecta a um radar específico"""
-        config = next((c for c in self.radar_configs if c['id'] == radar_id), None)
-        if not config:
-            logger.error(f"❌ Configuração não encontrada para {radar_id}")
-            return False
+    def connect(self):
+        # Sempre detecta automaticamente a porta serial
+        if not self.port:
+            logger.info("🔍 Detectando porta serial automaticamente...")
+            detected_port = self.find_serial_port()
+            if detected_port:
+                self.port = detected_port
+                logger.info(f"✅ Porta serial detectada: {self.port}")
+            else:
+                logger.error("❌ Nenhuma porta serial disponível para conexão!")
+                return False
+        else:
+            # Verifica se a porta atual ainda existe
+            if not os.path.exists(self.port):
+                logger.warning(f"⚠️ Porta {self.port} desconectada. Detectando nova porta...")
+                detected_port = self.find_serial_port()
+                if detected_port:
+                    self.port = detected_port
+                    logger.info(f"✅ Nova porta detectada: {self.port}")
+                else:
+                    logger.error("❌ Nenhuma porta serial disponível!")
+                    return False
         
         try:
-            logger.info(f"🔄 Conectando {radar_id} à porta {config['port']} (baudrate: {config['baudrate']})...")
+            logger.info(f"🔄 Conectando à porta serial {self.port} (baudrate: {self.baudrate})...")
             
-            serial_connection = serial.Serial(
-                port=config['port'],
-                baudrate=config['baudrate'],
+            self.serial_connection = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
                 timeout=1,
                 write_timeout=1,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE
             )
-            # Evita resets indesejados por DTR/RTS durante deep sleep
-            try:
-                serial_connection.dtr = True
-                serial_connection.rts = False
-            except Exception:
-                pass
             
             time.sleep(2)
             
-            self.radar_connections[radar_id] = serial_connection
-            logger.info(f"✅ {radar_id} conectado com sucesso!")
+            logger.info(f"✅ Conexão serial estabelecida com sucesso!")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Erro ao conectar {radar_id}: {str(e)}")
+            logger.error(f"❌ Erro ao conectar à porta serial: {str(e)}")
             logger.error(traceback.format_exc())
             return False
 
-    def connect_all_radars(self):
-        """Conecta a todos os radares"""
-        if not self.find_serial_ports():
-            return False
-        
-        success_count = 0
-        for config in self.radar_configs:
-            if self.connect_radar(config['id']):
-                success_count += 1
-        
-        if success_count == len(self.radar_configs):
-            logger.info(f"✅ Todos os {success_count} radares conectados com sucesso!")
-            return True
-        else:
-            logger.error(f"❌ Apenas {success_count}/{len(self.radar_configs)} radares conectados!")
-            return False
-
-    def start(self, db_manager=None):
-        """Inicia o sistema de radar dual para SystemD"""
+    def start(self, db_manager):
+        """Inicia o sistema de radar para SystemD"""
         self.db_manager = db_manager
         self.is_running = True
         
-        # Cria gerenciadores do Google Sheets para cada radar
-        self.gsheets_managers = {}
-        for config in self.radar_configs:
-            try:
-                radar_id = config['id']
-                spreadsheet_name = config['spreadsheet_name']
-                worksheet_name = config.get('worksheet_name', 'Sheet1')
-                
-                logger.info(f"🔄 Conectando {radar_id} ao Google Sheets: {spreadsheet_name}")
-                logger.info(f"   📋 Configuração: {radar_id} -> {spreadsheet_name} / {worksheet_name}")
-                
-                gsheets_manager = GoogleSheetsManager(CREDENTIALS_PATH, spreadsheet_name, worksheet_name)
-                self.gsheets_managers[radar_id] = gsheets_manager
-                logger.info(f"✅ {radar_id} conectado ao Google Sheets com sucesso")
-                
-            except Exception as e:
-                logger.error(f"❌ Erro ao conectar {radar_id} ao Google Sheets: {str(e)}")
-                logger.error(f"❌ Detalhes do erro: {type(e).__name__}")
-                logger.error(f"❌ Configuração que falhou: {radar_id} -> {spreadsheet_name} / {worksheet_name}")
-                return False
-        
         try:
-            # Conecta a todos os radares
-            if not self.connect_all_radars():
-                logger.error("❌ Falha ao conectar com os radares")
+            # Conecta ao radar
+            if not self.connect():
+                logger.error("❌ Falha ao conectar com o radar")
                 return False
             
-            # Configuração inicial dos sensores
-            for config in self.radar_configs:
-                radar_id = config['id']
-                self.configure_sensor_continuous_mode(radar_id)
-                time.sleep(1)
+            # Configuração inicial do sensor
+            self.configure_sensor_continuous_mode()
+            time.sleep(3)
             
-            # Inicia threads de recepção para cada radar
-            for config in self.radar_configs:
-                radar_id = config['id']
-                self.receive_threads[radar_id] = threading.Thread(
-                    target=self.receive_data_loop, 
-                    args=(radar_id,), 
-                    daemon=True
-                )
-                self.receive_threads[radar_id].start()
-                logger.info(f"✅ Thread iniciada para {radar_id}")
+            # Inicia thread de recepção (única thread necessária)
+            self.receive_thread = threading.Thread(target=self.receive_data_loop, daemon=True)
+            self.receive_thread.start()
             
             return True
             
         except Exception as e:
-            logger.error(f"❌ Erro ao iniciar sistema dual: {str(e)}")
+            logger.error(f"❌ Erro ao iniciar sistema: {str(e)}")
             return False
+
+
 
     def stop(self):
-        """Para o sistema de radar dual para SystemD"""
+        """Para o sistema de radar para SystemD"""
         self.is_running = False
         
-        # Para threads de recepção
-        for radar_id, thread in self.receive_threads.items():
-            if thread and thread.is_alive():
-                thread.join(timeout=2)
+        # Para thread de recepção
+        if hasattr(self, 'receive_thread') and self.receive_thread and self.receive_thread.is_alive():
+            self.receive_thread.join(timeout=2)
         
-        # Fecha conexões seriais
-        for radar_id, connection in self.radar_connections.items():
-            if connection and connection.is_open:
-                connection.close()
+        # Fecha conexão serial
+        if self.serial_connection and self.serial_connection.is_open:
+            self.serial_connection.close()
         
-        logger.info("✅ Sistema de radar dual parado!")
+        logger.info("✅ Sistema de radar parado!")
 
-    def hardware_reset_radar(self, radar_id):
-        """Reinicia um radar específico via DTR/RTS"""
+    def hardware_reset_arduino(self):
+        """
+        Reinicia o Arduino/ESP32 via pulso nas linhas DTR/RTS da porta serial.
+        Compatível com o novo código Arduino MR60BHA2.
+        """
         try:
-            logger.warning(f"[RESET] Iniciando reset de {radar_id} via DTR/RTS...")
+            logger.warning("[ARDUINO RESET] Iniciando reset via DTR/RTS na porta serial...")
+            # Fecha a conexão principal se estiver aberta
+            was_open = False
+            if self.serial_connection and self.serial_connection.is_open:
+                self.serial_connection.close()
+                was_open = True
+                
+            # Aguarda um pouco antes de fazer o reset
+            time.sleep(1)
             
-            connection = self.radar_connections.get(radar_id)
-            if connection and connection.is_open:
-                connection.close()
+            # Abre uma conexão temporária só para reset
+            with serial.Serial(self.port, self.baudrate, timeout=1) as ser:
+                # Sequência de reset compatível com ESP32 e Arduino
+                ser.setDTR(False)
+                ser.setRTS(True)
+                time.sleep(0.1)
+                ser.setDTR(True)
+                ser.setRTS(False)
+                time.sleep(0.1)
                 
-            # Reabre conexão para reset
-            config = next((c for c in self.radar_configs if c['id'] == radar_id), None)
-            if config:
-                with serial.Serial(config['port'], config['baudrate'], timeout=1) as ser:
-                    ser.setDTR(False)
-                    ser.setRTS(True)
-                    time.sleep(0.1)
-                    ser.setDTR(True)
-                    ser.setRTS(False)
-                    time.sleep(0.1)
-                    
-                    ser.setDTR(False)
-                    time.sleep(0.1)
-                    ser.setDTR(True)
-                    time.sleep(0.5)
+                # Reset adicional específico para ESP32
+                ser.setDTR(False)
+                time.sleep(0.1)
+                ser.setDTR(True)
+                time.sleep(0.5)
                 
-                logger.info(f"[RESET] {radar_id} resetado com sucesso!")
-                
-                # Reconecta
-                time.sleep(3)
-                self.connect_radar(radar_id)
-                return True
-                
+            logger.info("[ARDUINO RESET] Pulso de reset enviado com sucesso!")
+            
+            # Aguarda Arduino reinicializar (baseado no código Arduino)
+            logger.info("[ARDUINO RESET] Aguardando Arduino reinicializar...")
+            time.sleep(3)  # Arduino precisa de tempo para inicializar
+            
+            # Reabre a conexão principal se estava aberta
+            if was_open:
+                self.connect()
+            return True
         except Exception as e:
-            logger.error(f"[RESET] Falha ao resetar {radar_id}: {e}")
+            logger.error(f"[ARDUINO RESET] Falha ao resetar Arduino: {e}")
+            logger.error(traceback.format_exc())
             return False
 
-    def receive_data_loop(self, radar_id):
-        """Loop de recepção de dados para um radar específico"""
+    def receive_data_loop(self):
         buffer = ""
         last_data_time = time.time()
-        # Controle de blocos completos vindos do radar
-        message_mode = False
-        message_buffer = ""
-        seen_target_header = False
-        
+        if not hasattr(self, 'last_valid_data_time'):
+            self.last_valid_data_time = time.time()
+        self.RESET_TIMEOUT = 600  # 10 minutos (tolerante com deep sleep do Arduino)
+        # Loop de recepção de dados iniciado
+
+        bloco_buffer = ""
+        coletando_bloco = False
+
         while self.is_running:
             try:
-                connection = self.radar_connections.get(radar_id)
-                if not connection or not connection.is_open:
-                    logger.warning(f"⚠️ Conexão de {radar_id} fechada, tentando reconectar...")
-                    self.connect_radar(radar_id)
+                if not self.serial_connection.is_open:
+                    logger.warning("⚠️ Conexão serial fechada, tentando reconectar...")
+                    self.connect()
                     time.sleep(1)
                     continue
 
-                in_waiting = connection.in_waiting
+                in_waiting = self.serial_connection.in_waiting
                 if in_waiting is None:
                     in_waiting = 0
 
-                data = connection.read(in_waiting or 1)
+                data = self.serial_connection.read(in_waiting or 1)
                 if data:
                     last_data_time = time.time()
                     text = data.decode('utf-8', errors='ignore')
-                    if DEBUG_RADAR:
-                        safe_chunk = text.replace('\n', '\\n')[:120]
-                        logger.debug(f"[RAW:{radar_id}] chunk=<{safe_chunk}> len={len(text)}")
                     buffer += text
 
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
-                        line = line.strip('\r')
-                        if DEBUG_RADAR:
-                            logger.debug(f"[RAW:{radar_id}] line=<{line}>")
-
-                        # Linha em branco pode indicar fim de bloco
-                        if not line.strip():
-                            if message_mode and message_buffer:
-                                self.process_radar_data(radar_id, message_buffer)
-                                self.last_valid_data_times[radar_id] = time.time()
-                                message_mode = False
-                                message_buffer = ""
-                                seen_target_header = False
+                        line = line.strip('\r')  # Remove \r também
+                        
+                        # Log simplificado para SystemD
+                        if line.strip():
+                            # Dados do radar - prioridade máxima
+                            if any(key in line for key in ['breath_rate', 'heart_rate', 'x_position', 'y_position', 'Human Detected', 'Target']):
+                                logger.debug(f"🎯 Dados: {line.strip()}")
+                            # Erros críticos - importante
+                            elif any(critical in line for critical in ['CRÍTICO', 'FALHOU', 'ERROR', '❌']):
+                                logger.warning(f"⚠️ {line.strip()}")
+                            # Outros - silencioso
+                            else:
+                                logger.debug(f"Debug: {line.strip()}")
+                        
+                        # === DETECÇÃO DE DADOS DO ARDUINO (PRIORIDADE MÁXIMA) ===
+                        
+                        # FORMATO 1: JSON do Arduino (formato atual)
+                        # {"radar_id":"RADAR_1","timestamp_ms":12345,"person_count":1,"active_people":[{"x_pos":0.5,"y_pos":1.2,"distance_raw":1.3,"confidence":85}]}
+                        if line.strip().startswith('{') and line.strip().endswith('}'):
+                            try:
+                                import json
+                                json_data = json.loads(line.strip())
+                                if 'active_people' in json_data and json_data.get('person_count', 0) > 0:
+                                    logger.debug(f"🎯 JSON detectado: {line.strip()}")
+                                    self.process_radar_data(line.strip())
+                                    self.last_valid_data_time = time.time()
+                                    continue
+                            except (json.JSONDecodeError, ImportError):
+                                pass  # Não é JSON válido, continua para outros formatos
+                        
+                        # Formato simples: linhas individuais de dados
+                        if any(key in line for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
+                            if not coletando_bloco:
+                                coletando_bloco = True
+                                bloco_buffer = ""
+                            bloco_buffer += line + "\n"
+                            # Se temos todos os 4 campos básicos, processa imediatamente
+                            if all(key in bloco_buffer for key in ['breath_rate:', 'heart_rate:', 'x_position:', 'y_position:']):
+                                self.process_radar_data(bloco_buffer)
+                                coletando_bloco = False
+                                bloco_buffer = ""
+                                self.last_valid_data_time = time.time()
                             continue
-
-                        # Início de um novo bloco de dados do radar
+                        
+                        # Formato completo: começa with Human Detected
                         if '-----Human Detected-----' in line:
-                            message_mode = True
-                            message_buffer = line + '\n'
-                            seen_target_header = False
-                            logger.debug(f"[SERIAL] Bloco iniciado em {radar_id}")
-                            self.last_valid_data_times[radar_id] = time.time()
+                            coletando_bloco = True
+                            bloco_buffer = line + "\n"
                             continue
-
-                        # Continuação do bloco atual
-                        if message_mode:
-                            message_buffer += line + '\n'
-                            if DEBUG_RADAR:
-                                logger.debug(f"[RAW:{radar_id}] buffering len={len(message_buffer)}")
-                            # Atividade durante coleta de bloco
-                            self.last_valid_data_times[radar_id] = time.time()
-                            # Marca quando começar a seção Target 1
-                            if 'Target 1:' in line:
-                                seen_target_header = True
-                            # Considera o bloco completo quando receber o último campo do alvo
-                            # Em nossos dados, a última linha é "move_speed: ... cm/s"
-                            if seen_target_header and 'move_speed' in line:
-                                if DEBUG_RADAR:
-                                    logger.debug(f"[RAW:{radar_id}] block_complete (move_speed)")
-                                self.process_radar_data(radar_id, message_buffer)
-                                self.last_valid_data_times[radar_id] = time.time()
-                                message_mode = False
-                                message_buffer = ""
-                                seen_target_header = False
-                            # Alternativa: alguns firmwares não enviam move_speed. Finaliza ao ver apenas vitais + distância
-                            elif (not seen_target_header) and ('distance:' in line):
-                                if DEBUG_RADAR:
-                                    logger.debug(f"[RAW:{radar_id}] block_complete (distance only)")
-                                self.process_radar_data(radar_id, message_buffer)
-                                self.last_valid_data_times[radar_id] = time.time()
-                                message_mode = False
-                                message_buffer = ""
-                                seen_target_header = False
-                            # Fallback: se vier uma linha em branco (separador), finalize também
+                        elif coletando_bloco:
+                            if line.strip() == "":
+                                # Linha em branco: fim do bloco!
+                                self.process_radar_data(bloco_buffer)
+                                coletando_bloco = False
+                                bloco_buffer = ""
+                                self.last_valid_data_time = time.time()  # Atualiza quando processa dados
+                            else:
+                                bloco_buffer += line + "\n"
                             continue
+                        
+                        # === COMANDOS E STATUS DO ARDUINO ===
+                        
+                        # Detecta heartbeat do ESP32/Arduino
+                        if 'HEARTBEAT: Sistema ativo' in line or 'HEARTBEAT:' in line:
+                            last_data_time = time.time()  # Atualiza timestamp de dados
+                            self.last_valid_data_time = time.time()
+                            continue
+                        
+                        # Detecta deep sleep horário (Arduino)
+                        if '=== DEEP SLEEP HORÁRIO ===' in line or 'DEEP SLEEP HORÁRIO' in line:
+                            logger.info("😴 Arduino em deep sleep (1 minuto)")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            continue
+                        
+                        # Detecta teste de deep sleep (Arduino)
+                        if '=== TESTE DE DEEP SLEEP ===' in line:
+                            logger.info("🧪 [SERIAL] Arduino executando teste de deep sleep")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            continue
+                            
+                        # Detecta entrada em deep sleep
+                        if 'Entrando em deep sleep' in line:
+                            logger.info("😴 [SERIAL] Arduino entrando em deep sleep")
+                            continue
+                        
+                        # Detecta saída do deep sleep
+                        if 'Acordou do deep sleep' in line or 'Voltando ao modo de operação normal' in line:
+                            logger.info("🌅 [SERIAL] Arduino saiu do deep sleep - voltando ao normal")
+                            continue
+                        
+                        # Detecta reset do sistema
+                        if '=== RESETANDO SISTEMA COMPLETO ===' in line:
+                            logger.info("🔄 [SERIAL] ESP32 executando reset completo do sistema")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            continue
+                        
+                        # Detecta reinicialização do sensor
+                        if '=== REINICIALIZANDO SENSOR ===' in line or 'Sensor MR60BHA2 reinicializado' in line:
+                            logger.info("🔧 [SERIAL] ESP32 reinicializando sensor MR60BHA2")
+                            continue
+                        
+                        # Detecta diagnósticos do sistema (Arduino)
+                        if '=== DIAGNÓSTICO COMPLETO DO SISTEMA ===' in line or 'DIAGNÓSTICO' in line:
+                            logger.info("🔍 [SERIAL] Arduino executando diagnóstico completo")
+                            continue
+                        
+                        # Detecta problemas de memória (Arduino)
+                        if 'ALERTA: Memória baixa!' in line or 'Fragmentação crítica detectada' in line:
+                            logger.warning("⚠️ [SERIAL] Arduino detectou problemas de memória")
+                            continue
+                            
+                        # Detecta verificações específicas do Arduino
+                        if any(check in line for check in ['=== DEBUG', '=== VERIFICAÇÃO', '=== TESTE']):
+                            logger.debug(f"🔧 [SERIAL] Arduino: {line.strip()}")
+                            continue
+                        
+                        # Detecta problemas de comunicação
+                        if 'ALERTA: Conexão instável detectada!' in line:
+                            logger.warning("⚠️ [SERIAL] ESP32 detectou problemas de comunicação")
+                            continue
+                        
+                        # Detecta ativação do sensor
+                        if 'Sensor ativado e funcionando!' in line:
+                            logger.info("✅ [SERIAL] Sensor MR60BHA2 ativado com sucesso")
+                            continue
+                        
+                        # Detecta modo inativo do sensor
+                        if 'Sensor em modo inativo' in line:
+                            logger.warning("😴 [SERIAL] Sensor MR60BHA2 em modo inativo - aguardando ativação")
+                            continue
+                        
+                        # Ignora mensagens de debug verboso do Arduino
+                        if any(ignore in line for ignore in [
+                            'DADOS SIMULADOS', 'Método robusto falhou', 'usando dados simulados', 
+                            'TENTATIVA ROBUSTA', 'Todas as tentativas falharam', 'Tentativa', 'Falha na',
+                            'CRÍTICO: Posição E dados vitais falharam', 'Problema sério de comunicação',
+                            'DEBUG DADOS VITAIS', 'FIM DEBUG VITAIS', 'DEBUG POSIÇÃO'
+                        ]):
+                            continue
+                        
+                        # Detecta se ESP32 entrou em modo download
+                        if 'waiting for download' in line or 'DOWNLOAD(' in line:
+                            logger.warning("⚠️ [SERIAL] ESP32 entrou em modo download! Aguardando reinicialização...")
+                            coletando_bloco = False
+                            bloco_buffer = ""
+                            time.sleep(5)  # Aguarda 5 segundos para ESP32 reiniciar
+                            continue
+                        
+                        # Detecta estatísticas do sistema
+                        if 'Loop ativo - Total:' in line:
+                            logger.debug(f"📊 [SERIAL] {line.strip()}")
+                            continue
+                        
+                        # Detecta status de deep sleep
+                        if 'Próximo deep sleep em:' in line:
+                            logger.debug(f"⏰ [SERIAL] {line.strip()}")
+                            continue
+                        
 
-                        # Fora de bloco: apenas logs de sistema/diagnóstico
-                        if any(critical in line for critical in ['CRÍTICO', 'FALHOU', 'ERROR', '❌']):
-                            logger.warning(f"⚠️ [{radar_id}] {line.strip()}")
-                        else:
-                            logger.debug(f"Debug [{radar_id}]: {line.strip()}")
 
-                # Verifica timeout de dados
                 current_time = time.time()
-                if current_time - self.last_valid_data_times[radar_id] > self.RESET_TIMEOUT:
-                    connection = self.radar_connections.get(radar_id)
-                    if not connection or not connection.is_open:
-                        # Provável deep sleep: apenas aguarda reenumerar e faz backoff
-                        self.reconnect_backoff[radar_id] = min(self.reconnect_backoff[radar_id] * 2, 30.0)
-                        logger.warning(f"⚠️ {radar_id}: Porta ausente por deep sleep? Aguardando {self.reconnect_backoff[radar_id]:.1f}s e tentando reconectar...")
-                        time.sleep(self.reconnect_backoff[radar_id])
-                        self.connect_radar(radar_id)
-                    else:
-                        logger.warning(f"⚠️ {radar_id}: Nenhum dado por {self.RESET_TIMEOUT}s. Tentando reset de hardware...")
-                        self.hardware_reset_radar(radar_id)
-                    self.last_valid_data_times[radar_id] = current_time
+                if current_time - self.last_valid_data_time > self.RESET_TIMEOUT:
+                    logger.warning("⚠️ Nenhum dado ou heartbeat recebido por mais de 10 minutos. Executando reset automático do Arduino via DTR/RTS...")
+                    self.hardware_reset_arduino()
+                    self.last_valid_data_time = current_time
 
+                # Limpeza periódica de memória - REMOVIDO para SystemD
+                
                 if time.time() - last_data_time > 30:
-                    logger.warning(f"⚠️ {radar_id}: Nenhum dado recebido nos últimos 30 segundos")
+                    logger.warning("⚠️ Nenhum dado ou heartbeat recebido nos últimos 30 segundos")
                     last_data_time = time.time()
 
                 time.sleep(0.01)
+            except (OSError, IOError) as e:
+                error_msg = str(e).lower()
+                error_code = str(e)
+                current_time = time.time()
                 
+                # Incrementa contador de erros consecutivos
+                if current_time - self.last_error_time < 60:  # Erro nos últimos 60 segundos
+                    self.consecutive_errors += 1
+                else:
+                    self.consecutive_errors = 1  # Reset se passou muito tempo
+                
+                self.last_error_time = current_time
+                
+                # Trata diferentes tipos de erro de I/O
+                if ('device not configured' in error_msg or 'errno 6' in error_msg or 
+                    'input/output error' in error_msg or 'errno 5' in error_msg):
+                    
+                    logger.error(f"❌ [SERIAL] Erro de I/O detectado: {e} (Erro #{self.consecutive_errors})")
+                    
+                    # Se muitos erros consecutivos, aguarda mais tempo
+                    if self.consecutive_errors >= self.MAX_CONSECUTIVE_ERRORS:
+                        logger.warning(f"⚠️ [SERIAL] Muitos erros consecutivos ({self.consecutive_errors}), aguardando 30 segundos...")
+                        time.sleep(30)
+                        self.consecutive_errors = 0  # Reset contador
+                    else:
+                        logger.info("🔄 [SERIAL] Tentando reconectar automaticamente...")
+                        
+                        # Fecha conexão corrompida
+                        try:
+                            if self.serial_connection:
+                                self.serial_connection.close()
+                        except:
+                            pass
+                        
+                        # Tenta reconectar
+                        time.sleep(2)
+                        try:
+                            self.connect()
+                        except Exception as reconnect_error:
+                            logger.error(f"❌ [SERIAL] Falha na reconexão: {reconnect_error}")
+                            time.sleep(5)  # Aguarda mais tempo antes da próxima tentativa
+                else:
+                    logger.error(f"❌ [SERIAL] Erro desconhecido: {e}")
+                    time.sleep(1)
             except Exception as e:
-                err_msg = str(e)
-                logger.error(f"❌ [{radar_id}] Erro no loop de recepção: {err_msg}")
-                # Trata erros comuns de USB/Serial: desconectar e reconectar a porta
-                try:
-                    connection = self.radar_connections.get(radar_id)
-                    if connection and connection.is_open:
-                        connection.close()
-                except Exception:
-                    pass
-                time.sleep(1.0)
-                self.connect_radar(radar_id)
+                logger.error(f"❌ [SERIAL] Erro geral no loop: {str(e)}")
+                logger.error(traceback.format_exc())
+                time.sleep(1)
 
-    def configure_sensor_continuous_mode(self, radar_id):
+    def reset_radar(self):
+        """Executa um reset no radar - adaptado para o novo código Arduino"""
+        try:
+            logger.warning("🔄 [RESET] Iniciando reset do radar por inatividade de dados...")
+            
+            # Desconecta o radar
+            if self.serial_connection and self.serial_connection.is_open:
+                logger.info("[RESET] Fechando conexão serial antes do reset...")
+                self.serial_connection.close()
+                time.sleep(1)  # Aguarda 1 segundo
+            else:
+                logger.info("[RESET] Conexão serial já estava fechada.")
+            
+            # Reconecta o radar
+            logger.info(f"[RESET] Reabrindo conexão serial na porta {self.port}...")
+            self.serial_connection = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                timeout=1,
+                write_timeout=1,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE
+            )
+            logger.info("[RESET] Conexão serial reestabelecida.")
+            
+            # === NOVOS COMANDOS DE RESET DO ARDUINO ===
+            
+            # 1. Tenta comando Tiny Frame (protocolo do MR60BHA2)
+            logger.info("[RESET] Enviando comando de reset via Tiny Frame...")
+            reset_frame = bytes([0x02, 0x01, 0x01, 0x00, 0x04])  # Frame de reset
+            self.serial_connection.write(reset_frame)
+            time.sleep(1)
+            
+            # 2. Tenta comando ASCII
+            logger.info("[RESET] Enviando comando de reset ASCII...")
+            self.serial_connection.write(b'RESET\n')
+            time.sleep(1)
+            self.serial_connection.write(b'RST\n')
+            time.sleep(1)
+            
+            # 3. Aguarda resposta do radar
+            logger.info("[RESET] Aguardando resposta do radar...")
+            time.sleep(3)  # Aguarda radar processar comandos
+            
+            # 4. Verifica se há resposta
+            if self.serial_connection.in_waiting > 0:
+                response = self.serial_connection.read(self.serial_connection.in_waiting)
+                logger.info(f"[RESET] Resposta recebida: {response}")
+            
+            logger.info("✅ [RESET] Reset do radar concluído com sucesso!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ [RESET] Erro ao resetar o radar: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
+
+
+
+    def configure_sensor_continuous_mode(self):
         """Configura sensor para modo contínuo - Adaptado para novo Arduino"""
         try:
-            connection = self.radar_connections.get(radar_id)
-            if connection and connection.is_open:
-                logger.info(f"[CONFIG] Configurando {radar_id} para modo contínuo...")
+            if self.serial_connection and self.serial_connection.is_open:
+                logger.info("[CONFIG] Configurando sensor para modo contínuo (Arduino MR60BHA2)...")
                 
-                # Comandos para modo contínuo via Tiny Frame
+                # === COMANDOS ESPECÍFICOS PARA O NOVO ARDUINO ===
+                
+                # Comandos para modo contínuo via Tiny Frame (baseado no código Arduino)
                 continuous_mode_frame = bytes([0x02, 0x01, 0x02, 0x01, 0x06])
-                connection.write(continuous_mode_frame)
+                self.serial_connection.write(continuous_mode_frame)
                 time.sleep(0.5)
                 
                 # Comando para desabilitar sleep
                 sleep_disable_frame = bytes([0x02, 0x01, 0x03, 0x00, 0x06])
-                connection.write(sleep_disable_frame)
+                self.serial_connection.write(sleep_disable_frame)
                 time.sleep(0.5)
                 
                 # Comando para modo sempre ativo
                 always_on_frame = bytes([0x02, 0x01, 0x04, 0x01, 0x08])
-                connection.write(always_on_frame)
+                self.serial_connection.write(always_on_frame)
                 time.sleep(0.5)
                 
-                # Comandos ASCII compatíveis
+                # === COMANDOS ASCII COMPATÍVEIS COM O ARDUINO ===
                 ascii_commands = [
                     "CONTINUOUS_MODE=1",
                     "SLEEP_MODE=0", 
                     "ALWAYS_ON=1",
                     "TIMEOUT=0",
                     "CONTINUOUS_DETECTION=1",
-                    "POSITION_MODE=1",
-                    "TARGET_TRACKING=1"
+                    "POSITION_MODE=1",  # Novo: ativa modo de posição
+                    "TARGET_TRACKING=1"  # Novo: ativa rastreamento de alvos
                 ]
                 
                 for cmd in ascii_commands:
-                    connection.write(f"{cmd}\n".encode())
+                    self.serial_connection.write(f"{cmd}\n".encode())
                     time.sleep(0.2)
                 
-                logger.info(f"✅ {radar_id} configurado para modo contínuo")
+                logger.info("✅ [CONFIG] Sensor configurado para modo contínuo compatível com Arduino")
                 return True
                 
         except Exception as e:
-            logger.error(f"❌ [CONFIG] Erro ao configurar {radar_id}: {str(e)}")
+            logger.error(f"❌ [CONFIG] Erro ao configurar sensor: {str(e)}")
             return False
 
-    def process_radar_data(self, radar_id, raw_data):
-        """Processa dados de um radar específico"""
-        # Usa o parser atualizado que suporta múltiplos formatos
+
+    
+    def _show_satisfaction_summary(self):
+        """Mostra resumo periódico das estatísticas de satisfação"""
+        try:
+            if not self.satisfaction_history:
+                return
+                
+            current_time = time.time()
+            if current_time - self.last_satisfaction_summary < self.SATISFACTION_SUMMARY_INTERVAL:
+                return
+                
+            # Filtra dados dos últimos 5 minutos
+            recent_data = [entry for entry in self.satisfaction_history 
+                          if current_time - entry['timestamp'] < 300]  # 5 minutos
+            
+            if not recent_data:
+                return
+                
+            # Calcula estatísticas
+            scores = [entry['score'] for entry in recent_data]
+            classes = [entry['class'] for entry in recent_data]
+            
+            avg_score = sum(scores) / len(scores)
+            
+            # Conta classificações
+            class_count = {}
+            for cls in classes:
+                class_count[cls] = class_count.get(cls, 0) + 1
+                
+            # Encontra classificação dominante
+            dominant_class = max(class_count, key=class_count.get)
+            
+            logger.info("📈" * 15)
+            logger.info("📊 RESUMO DE SATISFAÇÃO (Últimos 5 min)")
+            logger.info("📈" * 15)
+            logger.info(f"📊 Total de medições: {len(recent_data)}")
+            logger.info(f"🎯 Score médio: {avg_score:.1f}/100")
+            logger.info(f"🏆 Classificação dominante: {dominant_class}")
+            logger.info("-" * 40)
+            for cls, count in class_count.items():
+                percentage = (count / len(recent_data)) * 100
+                logger.info(f"   {cls}: {count} ({percentage:.1f}%)")
+            logger.info("📈" * 15)
+            
+            self.last_satisfaction_summary = current_time
+            
+        except Exception as e:
+            logger.error(f"[SATISFACTION] Erro no resumo: {str(e)}")
+
+    def _check_engagement(self, section_id, distance, move_speed):
+        # Engajamento: basta a última leitura ser válida
+        if section_id is not None and distance <= self.ENGAGEMENT_DISTANCE and move_speed <= self.ENGAGEMENT_SPEED:
+            return True
+        return False
+
+    def process_radar_data(self, raw_data):
+        # Usa o parser atualizado que suporta múltiplos formatos incluindo JSON
         data = parse_serial_data(raw_data)
         
         if data is None:
-            logger.warning(f"❌ [{radar_id}] Parser retornou None para: {raw_data[:200]}...")
-            # Heurística: se bloco contém vitais e posições zeradas, conta como zero contínuo
-            try:
-                xr = re.search(r'x_position\s*:\s*([-+]?\d*\.?\d+)', raw_data)
-                yr = re.search(r'y_position\s*:\s*([-+]?\d*\.?\d+)', raw_data)
-                br = re.search(r'breath_rate\s*:\s*([-+]?\d*\.?\d+)', raw_data)
-                hr = re.search(r'heart_rate\s*:\s*([-+]?\d*\.?\d+)', raw_data)
-                if xr and yr and br and hr:
-                    xv = float(xr.group(1)); yv = float(yr.group(1));
-                    bv = float(br.group(1)); hv = float(hr.group(1));
-                    if abs(xv) < 1e-6 and abs(yv) < 1e-6 and bv == 0.0 and hv == 0.0:
-                        if not self.zero_only_since.get(radar_id):
-                            self.zero_only_since[radar_id] = time.time()
-                        elif time.time() - self.zero_only_since[radar_id] > self.ZERO_ONLY_TIMEOUT:
-                            logger.warning(f"⚠️ [{radar_id}] Somente zeros há mais de {self.ZERO_ONLY_TIMEOUT}s. Resetando...")
-                            self.hardware_reset_radar(radar_id)
-                            self.zero_only_since[radar_id] = time.time()
-                    else:
-                        self.zero_only_since[radar_id] = None
-            except Exception:
-                pass
+            logger.warning(f"❌ [PROCESS] Parser retornou None para: {raw_data[:200]}...")
             return
             
-        # Marca como dados reais e adiciona identificador do radar
+        # Marca como dados reais (sem simulação automática)
         data['is_simulated'] = False
-        data['radar_id'] = radar_id
         
-        self.messages_processed[radar_id] += 1
+        self.messages_processed += 1
         
         # Log conciso para SystemD
-        logger.info(f"✅ [{radar_id}] Cliente: x={data.get('x_point', 0):.1f}m y={data.get('y_point', 0):.1f}m ❤️{data.get('heart_rate', 0):.0f} 🫁{data.get('breath_rate', 0):.0f}")
+        logger.info(f"✅ Cliente: x={data.get('x_point', 0):.1f}m y={data.get('y_point', 0):.1f}m ❤️{data.get('heart_rate', 0):.0f} 🫁{data.get('breath_rate', 0):.0f}")
         
         x = data.get('x_point', 0)
         y = data.get('y_point', 0)
-        # Se X/Y vieram zerados, logar o bloco bruto para diagnóstico
-        if (abs(x) < 1e-6 and abs(y) < 1e-6):
-            snippet = raw_data if len(raw_data) < 600 else raw_data[:600] + "..."
-            logger.warning(f"🕵️ [{radar_id}] X/Y zerados. Bloco bruto recebido:\n{snippet}")
-            if not self.zero_only_since.get(radar_id):
-                self.zero_only_since[radar_id] = time.time()
-        else:
-            self.zero_only_since[radar_id] = None
-        move_speed = abs(data.get('dop_index', 0) * RANGE_STEP) if 'dop_index' in data else data.get('move_speed', 0)
+        dop_index_val = data.get('dop_index', None)
+        move_speed = data.get('move_speed', None)
+        if move_speed is None:
+            move_speed = abs(dop_index_val) if dop_index_val is not None else 0.0  # cm/s
         
-        if self._is_new_person(radar_id, x, y, move_speed):
-            self.current_session_ids[radar_id] = self._generate_session_id(radar_id)
-            self.last_activity_times[radar_id] = time.time()
-            self.session_positions[radar_id] = []
+        if self._is_new_person(x, y, move_speed):
+            self.current_session_id = self._generate_session_id()
+            self.last_activity_time = time.time()
+            self.session_positions = []
         
-        # Atualiza posição para este radar
-        if not hasattr(self, 'last_positions'):
-            self.last_positions = {}
-        self.last_positions[radar_id] = (x, y)
+        self.last_position = (x, y)
         
-        # Buffer circular para posições de sessão
-        if len(self.session_positions[radar_id]) >= 10:
-            self.session_positions[radar_id].pop(0)
+        # Buffer circular para posições de sessão (máximo 10 posições)
+        if len(self.session_positions) >= 10:
+            self.session_positions.pop(0)  # Remove a posição mais antiga
         
-        self.session_positions[radar_id].append({
+        self.session_positions.append({
             'x': x,
             'y': y,
             'speed': move_speed,
             'timestamp': time.time()
         })
         
-        self._update_session(radar_id)
+        self._update_session()
         
         heart_rate = data.get('heart_rate')
         breath_rate = data.get('breath_rate')
@@ -1272,27 +1381,24 @@ class DualRadarManager:
             y = data.get('y_point', 0)
             distance = (x**2 + y**2)**0.5
         
-        dop_index = data.get('dop_index', 0) if 'dop_index' in data else 0
-        move_speed = abs(dop_index * RANGE_STEP) if dop_index is not None else data.get('move_speed', 0)
-        
-        # Formata timestamp corretamente
-        current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        dop_index = data.get('dop_index', None)
+        if move_speed is None:
+            move_speed = abs(dop_index) if dop_index is not None else 0.0
         
         converted_data = {
-            'radar_id': radar_id,  # Identificador do radar
-            'session_id': self.current_session_ids[radar_id],
-            'timestamp': current_timestamp,
-            'x_point': round(float(data.get('x_point', 0)), 3),
-            'y_point': round(float(data.get('y_point', 0)), 3),
-            'move_speed': round(float(move_speed), 2),
-            'heart_rate': int(heart_rate) if heart_rate is not None else 0,
-            'breath_rate': round(float(breath_rate), 1) if breath_rate is not None else 0.0,
-            'distance': round(float(distance), 2),
-            'dop_index': int(dop_index) if dop_index is not None else 0,
+            'radar_id': os.getenv('RADAR_ID', 'RADAR_1'),
+            'session_id': self.current_session_id,
+            'x_point': data.get('x_point', 0),
+            'y_point': data.get('y_point', 0),
+            'move_speed': move_speed,
+            'distance': distance,
+            'dop_index': dop_index,
+            'heart_rate': heart_rate,
+            'breath_rate': breath_rate,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'is_simulated': data.get('is_simulated', False)
         }
         
-        # Determina seção e produto
         section = shelf_manager.get_section_at_position(
             converted_data['x_point'],
             converted_data['y_point'],
@@ -1300,19 +1406,17 @@ class DualRadarManager:
         )
         
         if section:
-            converted_data['section_id'] = int(section['section_id'])
-            converted_data['product_id'] = str(section['product_id'])
+            converted_data['section_id'] = section['section_id']
+            converted_data['product_id'] = section['product_id']
             
-            # Calcula satisfação apenas se tiver dados vitais válidos
-            if (heart_rate is not None and heart_rate > 0 and 
-                breath_rate is not None and breath_rate > 0):
-                
+            # Calcula satisfação apenas se tiver dados vitais
+            if heart_rate is not None and breath_rate is not None:
                 satisfaction_result = self.analytics_manager.calculate_satisfaction_score(
                     move_speed, heart_rate, breath_rate, distance
                 )
                 satisfaction_score, satisfaction_class = satisfaction_result
-                converted_data['satisfaction_score'] = int(satisfaction_score)
-                converted_data['satisfaction_class'] = str(satisfaction_class)
+                converted_data['satisfaction_score'] = satisfaction_score
+                converted_data['satisfaction_class'] = satisfaction_class
                 
                 # Log simplificado para SystemD
                 emoji_map = {
@@ -1324,12 +1428,19 @@ class DualRadarManager:
                 }
                 emoji = emoji_map.get(satisfaction_class, "❓")
                 
-                logger.info(f"📊 [{radar_id}] Análise: {emoji} {satisfaction_class} ({satisfaction_score:.0f}/100) | Dist: {distance:.1f}m | Vel: {move_speed:.0f}cm/s")
-                logger.info(f"🏪 [{radar_id}] {section.get('section_name', 'N/A')} | 📦 {section.get('product_id', 'N/A')}")
+                logger.info(f"📊 Análise: {emoji} {satisfaction_class} ({satisfaction_score:.0f}/100) | Dist: {distance:.1f}m | Vel: {move_speed:.0f}cm/s")
+                
+                # Engajamento
+                is_engaged = self._check_engagement(section['section_id'] if section else None, distance, move_speed)
+                engagement_text = "🔥" if is_engaged else "💤"
+                logger.info(f"Engajamento: {engagement_text}")
+                
+                if section:
+                    logger.info(f"🏪 {section.get('section_name', 'N/A')} | 📦 {section.get('product_id', 'N/A')}")
             else:
                 converted_data['satisfaction_score'] = None
                 converted_data['satisfaction_class'] = None
-                logger.info(f"⚠️ [{radar_id}] Dados vitais insuficientes para análise de satisfação")
+                logger.info("⚠️ Dados vitais insuficientes para análise de satisfação")
             
             # Verifica engajamento
             converted_data['is_engaged'] = self._check_engagement(
@@ -1342,61 +1453,51 @@ class DualRadarManager:
             converted_data['satisfaction_class'] = None
             converted_data['is_engaged'] = False
         
-        # Envia para Google Sheets usando o gerenciador correto para este radar
+        # Envia para Google Sheets
         try:
-            gsheets_manager = self.gsheets_managers.get(radar_id)
-            if gsheets_manager:
-                gsheets_manager.insert_radar_data(converted_data)
-                # Busca o nome da planilha para este radar
-                radar_config = next((c for c in self.radar_configs if c['id'] == radar_id), None)
-                spreadsheet_name = radar_config.get('spreadsheet_name', 'N/A') if radar_config else 'N/A'
-                logger.debug(f"✅ [{radar_id}] Dados enviados para Google Sheets: {spreadsheet_name}")
-            else:
-                logger.error(f"❌ [{radar_id}] Gerenciador do Google Sheets não encontrado")
+            self.db_manager.insert_radar_data(converted_data)
+            logger.debug(f"✅ Dados enviados para Google Sheets")
                 
         except Exception as e:
-            logger.error(f"❌ [{radar_id}] Erro ao enviar dados: {str(e)}")
-
-        # Verificação final do período de zeros contínuos
-        if self.zero_only_since.get(radar_id):
-            if time.time() - self.zero_only_since[radar_id] > self.ZERO_ONLY_TIMEOUT:
-                logger.warning(f"⚠️ [{radar_id}] Somente zeros há mais de {self.ZERO_ONLY_TIMEOUT}s. Resetando...")
-                self.hardware_reset_radar(radar_id)
-                self.zero_only_since[radar_id] = time.time()
-
-    def _check_engagement(self, section_id, distance, move_speed):
-        """Verifica engajamento baseado na seção, distância e velocidade"""
-        if section_id is not None and distance <= 1.0 and move_speed <= 10.0:
-            return True
-        return False
+            logger.error(f"❌ Erro ao enviar dados: {str(e)}")
 
 def main():
     # Signal handler para graceful shutdown com SystemD
     def signal_handler(signum, frame):
         logger.info("🔄 Shutdown graceful solicitado pelo SystemD")
-        if 'dual_radar_manager' in locals():
-            dual_radar_manager.stop()
+        if 'radar_manager' in locals():
+            radar_manager.stop()
         sys.exit(0)
     
     # Registrar handlers para SystemD (SIGTERM) e Ctrl+C (SIGINT)
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
-    logger.info("🚀 Iniciando sistema de radar DUAL para SystemD...")
-    
-    # Cria gerenciador de radar dual
-    dual_radar_manager = DualRadarManager(RADAR_CONFIGS)
+    logger.info("🚀 Iniciando sistema de radar para SystemD...")
     
     try:
-        success = dual_radar_manager.start()
+        # Usar path absoluto otimizado
+        gsheets_manager = GoogleSheetsManager(CREDENTIALS_PATH, 'https://docs.google.com/spreadsheets/d/1MaXRVAe1iD2TH45e1BCObthJXUe_A33VJMKLO_roF74/edit?usp=sharing')
+        logger.info("✅ Google Sheets conectado")
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao conectar Google Sheets: {e}")
+        sys.exit(1)  # SystemD reinicia automaticamente
+    
+    # Detecção automática de porta
+    port = None
+    baudrate = int(os.getenv("SERIAL_BAUDRATE", "115200"))
+    
+    radar_manager = SerialRadarManager(port, baudrate)
+    
+    try:
+        success = radar_manager.start(gsheets_manager)
         
         if not success:
-            logger.error("❌ Falha ao iniciar o sistema dual de radar")
+            logger.error("❌ Falha ao iniciar o radar")
             sys.exit(1)  # SystemD reinicia automaticamente
         
-        # Lista portas dos radares
-        radar_ports = [f"{config['id']}: {config['port']}" for config in RADAR_CONFIGS if config['port']]
-        logger.info(f"✅ Sistema dual iniciado - Portas: {', '.join(radar_ports)}")
+        logger.info(f"✅ Sistema iniciado - Porta: {radar_manager.port}")
         
         # Loop principal simplificado para SystemD
         while True:
@@ -1404,17 +1505,15 @@ def main():
             
             # Status a cada 60 segundos (menos verboso)
             if time.time() % 60 < 1:
-                active_radars = [radar_id for radar_id, connection in dual_radar_manager.radar_connections.items() 
-                               if connection and connection.is_open]
-                logger.info(f"📊 Sistema dual ativo - Radares ativos: {', '.join(active_radars)}")
+                logger.info(f"📊 Sistema ativo - Porta: {radar_manager.port}")
             
     except Exception as e:
         logger.error(f"❌ Erro crítico: {e}")
         sys.exit(1)  # SystemD reinicia automaticamente
         
     finally:
-        dual_radar_manager.stop()
-        logger.info("✅ Sistema dual encerrado!")
+        radar_manager.stop()
+        logger.info("✅ Sistema encerrado!")
 
 if __name__ == "__main__":
     main() 
