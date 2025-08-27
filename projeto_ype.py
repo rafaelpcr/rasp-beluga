@@ -158,8 +158,10 @@ def parse_serial_data(raw_data):
         #   move_speed: 0.00 cm/s
         has_human_detected = '-----Human Detected-----' in raw_data
         has_target_1 = 'Target 1:' in raw_data
+        has_any_coords = any(key in raw_data for key in ['x_point', 'y_point', 'x_position', 'y_position'])
         
-        if has_human_detected and has_target_1:
+        # Aceita bloco quando houver cabeçalho e pelo menos algum indicativo de coordenadas
+        if has_human_detected and (has_target_1 or has_any_coords):
             logger.debug("📡 [PARSER] Detectado formato atual do radar (Human Detected + Target)")
             
             # Padrões regex para todos os campos solicitados
@@ -206,13 +208,13 @@ def parse_serial_data(raw_data):
                     move_speed = float(move_speed_match.group(1))  # cm/s
                     logger.debug(f"📡 [PARSER] Velocidade detectada: {move_speed} cm/s")
                 
-                # Extrai dados vitais
-                breath_rate = 15.0  # Valor padrão
+                # Extrai dados vitais (sem defaults para evitar falsos positivos)
+                breath_rate = None
                 if breath_rate_match:
                     breath_rate = float(breath_rate_match.group(1))
                     logger.debug(f"📡 [PARSER] Taxa de respiração: {breath_rate}")
                 
-                heart_rate = 75.0  # Valor padrão
+                heart_rate = None
                 if heart_rate_match:
                     heart_rate = float(heart_rate_match.group(1))
                     logger.debug(f"📡 [PARSER] Frequência cardíaca: {heart_rate}")
@@ -246,7 +248,9 @@ def parse_serial_data(raw_data):
                     'heart_phase': 0.0    # Não disponível no formato atual
                 }
                 
-                logger.info(f"✅ [PARSER] Dados parseados: X={x_coord:.2f}m, Y={y_coord:.2f}m, ❤️{heart_rate:.0f}, 🫁{breath_rate:.0f}, 🏃{move_speed:.2f}m/s")
+                hr_disp = f"{heart_rate:.0f}" if heart_rate is not None else "N/A"
+                br_disp = f"{breath_rate:.0f}" if breath_rate is not None else "N/A"
+                logger.info(f"✅ [PARSER] Dados parseados: X={x_coord:.2f}m, Y={y_coord:.2f}m, ❤️{hr_disp}, 🫁{br_disp}, 🏃{move_speed:.2f}cm/s")
                 return data
         
         # FORMATO 2: Formato simples (send_formatted_data)
@@ -308,13 +312,19 @@ def convert_radar_data(raw_data):
                 if not data:
                     return None
 
-        # Garantir que todos os campos necessários estão presentes
+        # Garantir que todos os campos necessários estão presentes, sem defaults forçados
+        def to_float_or_none(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
         result = {
-            'x_point': float(data.get('x_point', 0)),
-            'y_point': float(data.get('y_point', 0)),
-            'move_speed': float(data.get('move_speed', 0)),
-            'heart_rate': float(data.get('heart_rate', 75)),
-            'breath_rate': float(data.get('breath_rate', 15))
+            'x_point': to_float_or_none(data.get('x_point')),
+            'y_point': to_float_or_none(data.get('y_point')),
+            'move_speed': to_float_or_none(data.get('move_speed')),
+            'heart_rate': to_float_or_none(data.get('heart_rate')),
+            'breath_rate': to_float_or_none(data.get('breath_rate'))
         }
 
         return result
@@ -1003,28 +1013,36 @@ class SerialRadarManager:
                             self.last_valid_data_time = time.time()
                             continue
                         
-                        # Detecta deep sleep horário (Arduino)
+                        # Detecta deep sleep horário (Arduino) e trata como heartbeat
                         if '=== DEEP SLEEP HORÁRIO ===' in line or 'DEEP SLEEP HORÁRIO' in line:
-                            logger.info("😴 Arduino em deep sleep (1 minuto)")
+                            logger.info("😴 Arduino em deep sleep (tratado como heartbeat)")
                             coletando_bloco = False
                             bloco_buffer = ""
+                            self.last_valid_data_time = time.time()
+                            last_data_time = time.time()
                             continue
                         
-                        # Detecta teste de deep sleep (Arduino)
+                        # Detecta teste de deep sleep (Arduino) e trata como heartbeat
                         if '=== TESTE DE DEEP SLEEP ===' in line:
-                            logger.info("🧪 [SERIAL] Arduino executando teste de deep sleep")
+                            logger.info("🧪 [SERIAL] Deep sleep (teste) tratado como heartbeat")
                             coletando_bloco = False
                             bloco_buffer = ""
+                            self.last_valid_data_time = time.time()
+                            last_data_time = time.time()
                             continue
                             
-                        # Detecta entrada em deep sleep
+                        # Detecta entrada em deep sleep e trata como heartbeat
                         if 'Entrando em deep sleep' in line:
-                            logger.info("😴 [SERIAL] Arduino entrando em deep sleep")
+                            logger.info("😴 [SERIAL] Entrando em deep sleep (tratado como heartbeat)")
+                            self.last_valid_data_time = time.time()
+                            last_data_time = time.time()
                             continue
                         
                         # Detecta saída do deep sleep
                         if 'Acordou do deep sleep' in line or 'Voltando ao modo de operação normal' in line:
                             logger.info("🌅 [SERIAL] Arduino saiu do deep sleep - voltando ao normal")
+                            self.last_valid_data_time = time.time()
+                            last_data_time = time.time()
                             continue
                         
                         # Detecta reset do sistema
@@ -1064,9 +1082,11 @@ class SerialRadarManager:
                             logger.info("✅ [SERIAL] Sensor MR60BHA2 ativado com sucesso")
                             continue
                         
-                        # Detecta modo inativo do sensor
+                        # Detecta modo inativo do sensor e considera como heartbeat (deepsleep baixa corrente)
                         if 'Sensor em modo inativo' in line:
-                            logger.warning("😴 [SERIAL] Sensor MR60BHA2 em modo inativo - aguardando ativação")
+                            logger.info("😴 [SERIAL] Sensor em modo inativo (tratado como heartbeat). Sem reset.")
+                            self.last_valid_data_time = time.time()
+                            last_data_time = time.time()
                             continue
                         
                         # Ignora mensagens de debug verboso do Arduino
@@ -1091,9 +1111,11 @@ class SerialRadarManager:
                             logger.debug(f"📊 [SERIAL] {line.strip()}")
                             continue
                         
-                        # Detecta status de deep sleep
+                        # Detecta status de deep sleep e renova heartbeat
                         if 'Próximo deep sleep em:' in line:
-                            logger.debug(f"⏰ [SERIAL] {line.strip()}")
+                            logger.debug(f"⏰ [SERIAL] {line.strip()} (heartbeat renovado)")
+                            self.last_valid_data_time = time.time()
+                            last_data_time = time.time()
                             continue
                         
 
@@ -1334,11 +1356,19 @@ class SerialRadarManager:
         
         self.messages_processed += 1
         
-        # Log conciso para SystemD
-        logger.info(f"✅ Cliente: x={data.get('x_point', 0):.1f}m y={data.get('y_point', 0):.1f}m ❤️{data.get('heart_rate', 0):.0f} 🫁{data.get('breath_rate', 0):.0f}")
+        # Log conciso para SystemD (evita mostrar 0 quando não há dado)
+        x_disp = data.get('x_point')
+        y_disp = data.get('y_point')
+        hr_disp = data.get('heart_rate')
+        br_disp = data.get('breath_rate')
+        x_text = f"{x_disp:.1f}m" if isinstance(x_disp, (int, float)) else "N/A"
+        y_text = f"{y_disp:.1f}m" if isinstance(y_disp, (int, float)) else "N/A"
+        hr_text = f"{hr_disp:.0f}" if isinstance(hr_disp, (int, float)) else "N/A"
+        br_text = f"{br_disp:.0f}" if isinstance(br_disp, (int, float)) else "N/A"
+        logger.info(f"✅ Cliente: x={x_text} y={y_text} ❤️{hr_text} 🫁{br_text}")
         
-        x = data.get('x_point', 0)
-        y = data.get('y_point', 0)
+        x = data.get('x_point') or 0
+        y = data.get('y_point') or 0
         dop_index_val = data.get('dop_index', None)
         move_speed = data.get('move_speed', None)
         if move_speed is None:
@@ -1376,7 +1406,7 @@ class SerialRadarManager:
             )
         
         distance = data.get('distance', 0)
-        if distance == 0:
+        if not distance or distance == 0:
             x = data.get('x_point', 0)
             y = data.get('y_point', 0)
             distance = (x**2 + y**2)**0.5
@@ -1453,10 +1483,15 @@ class SerialRadarManager:
             converted_data['satisfaction_class'] = None
             converted_data['is_engaged'] = False
         
-        # Envia para Google Sheets
+        # Envia para Google Sheets (somente leituras válidas)
         try:
-            self.db_manager.insert_radar_data(converted_data)
-            logger.debug(f"✅ Dados enviados para Google Sheets")
+            has_valid_position = isinstance(converted_data['x_point'], (int, float)) and isinstance(converted_data['y_point'], (int, float))
+            has_any_signal = (converted_data.get('heart_rate') is not None or converted_data.get('breath_rate') is not None)
+            if has_valid_position and (abs(converted_data['x_point']) + abs(converted_data['y_point'])) > 0:
+                self.db_manager.insert_radar_data(converted_data)
+                logger.debug(f"✅ Dados enviados para Google Sheets")
+            else:
+                logger.debug("⏭️ Leitura descartada (sem posição válida)")
                 
         except Exception as e:
             logger.error(f"❌ Erro ao enviar dados: {str(e)}")
